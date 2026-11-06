@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
-import { Subscriptions } from '@/features/subscriptions'
+import { SUBSCRIPTIONS_DEFAULT_SECTION } from '@/features/subscriptions/section-registry'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -28,6 +28,11 @@ export const Route = createFileRoute('/_authenticated/subscriptions/')({
     if (!auth.user || auth.user.role < ROLE.ADMIN) {
       throw redirect({ to: '/403' })
     }
+    // Keep the old bookmarkable URL working: the page is section-routed now, so
+    // the bare path resolves to the plan catalog.
+    throw redirect({
+      to: '/subscriptions/$section',
+      params: { section: SUBSCRIPTIONS_DEFAULT_SECTION },
+    })
   },
-  component: Subscriptions,
 })

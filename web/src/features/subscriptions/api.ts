@@ -20,8 +20,13 @@ import { api } from '@/lib/api'
 
 import type {
   ApiResponse,
+  BatchGrantSubscriptionsRequest,
+  BatchResetSubscriptionsRequest,
+  ListSubscriptionsParams,
+  ListSubscriptionsResponse,
   PlanRecord,
   PlanPayload,
+  SubscriptionBatchResult,
   UserSubscriptionRecord,
   CreateUserSubscriptionRequest,
   ResetUserSubscriptionsRequest,
@@ -127,6 +132,64 @@ export async function resetPlanSubscriptions(
     `/api/subscription/admin/plans/${planId}/subscriptions/reset`,
     data
   )
+  return res.data
+}
+
+// ============================================================================
+// Cross-user Subscription Management (admin bulk operations)
+// ============================================================================
+
+/**
+ * List subscriptions across every user, paginated and filterable. This is what
+ * the bulk management view renders; it returns owner/plan names inline.
+ */
+export async function listAllSubscriptions(
+  params: ListSubscriptionsParams = {}
+): Promise<ListSubscriptionsResponse> {
+  const res = await api.get('/api/subscription/admin/subscriptions', { params })
+  return res.data
+}
+
+/** Grant one plan to many users at once. */
+export async function batchGrantSubscriptions(
+  data: BatchGrantSubscriptionsRequest
+): Promise<ApiResponse<SubscriptionBatchResult>> {
+  const res = await api.post(
+    '/api/subscription/admin/subscriptions/grant',
+    data
+  )
+  return res.data
+}
+
+/** Cancel many subscriptions by id. */
+export async function batchInvalidateSubscriptions(
+  ids: number[]
+): Promise<ApiResponse<SubscriptionBatchResult>> {
+  const res = await api.post(
+    '/api/subscription/admin/subscriptions/invalidate',
+    { ids }
+  )
+  return res.data
+}
+
+/** Reset usage counters on many subscriptions by id. */
+export async function batchResetSubscriptions(
+  data: BatchResetSubscriptionsRequest
+): Promise<ApiResponse<SubscriptionBatchResult>> {
+  const res = await api.post(
+    '/api/subscription/admin/subscriptions/reset',
+    data
+  )
+  return res.data
+}
+
+/** Hard-delete many subscriptions by id. */
+export async function batchDeleteSubscriptions(
+  ids: number[]
+): Promise<ApiResponse<SubscriptionBatchResult>> {
+  const res = await api.post('/api/subscription/admin/subscriptions/delete', {
+    ids,
+  })
   return res.data
 }
 

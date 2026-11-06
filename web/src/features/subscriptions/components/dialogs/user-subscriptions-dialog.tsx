@@ -61,6 +61,7 @@ import {
 } from '../../api'
 import { formatQuotaLimitLabel, formatTimestamp } from '../../lib'
 import type { PlanRecord, UserSubscriptionRecord } from '../../types'
+import { AllowedModelsLabel } from '../allowed-models-label'
 
 interface Props {
   open: boolean
@@ -302,6 +303,13 @@ export function UserSubscriptionsDialog(props: Props) {
                         <div className='text-muted-foreground text-sm'>
                           {t('Source')}: {sub.source || '-'}
                         </div>
+                        {/* Scope decides whether this subscription can pay for a
+                            given model at all, so it belongs beside the plan. */}
+                        <AllowedModelsLabel
+                          allowed={record.allowed_models}
+                          hideWhenUnscoped
+                          className='text-xs'
+                        />
                       </div>
                     )
                   },
@@ -469,10 +477,13 @@ export function UserSubscriptionsDialog(props: Props) {
         >
           <label className='flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm'>
             <span>{t('Advance next reset time')}</span>
+            {/* The wrapping <label> already names this switch; an extra
+
+                aria-label would concatenate into a doubled accessible name. */}
+
             <Switch
               checked={advanceResetTime}
               onCheckedChange={(checked) => setAdvanceResetTime(!!checked)}
-              aria-label={t('Advance next reset time')}
             />
           </label>
         </ConfirmDialog>

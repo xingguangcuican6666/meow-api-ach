@@ -44,6 +44,8 @@ func quotaLimitsErrorMessage(err error) string {
 		return "额度上限时间窗口不能为负数"
 	case errors.Is(err, model.ErrSubscriptionQuotaLimitModels):
 		return "额度上限模型配置无效"
+	case errors.Is(err, model.ErrSubscriptionAllowedModelsInvalid):
+		return "可用模型配置无效"
 	default:
 		return err.Error()
 	}
@@ -232,6 +234,12 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 	req.Plan.QuotaLimits = quotaLimits
+	allowedModels, err := model.ValidateSubscriptionAllowedModels(req.Plan.AllowedModels)
+	if err != nil {
+		common.ApiErrorMsg(c, quotaLimitsErrorMessage(err))
+		return
+	}
+	req.Plan.AllowedModels = allowedModels
 	err = model.DB.Create(&req.Plan).Error
 	if err != nil {
 		common.ApiError(c, err)
@@ -312,6 +320,12 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 	req.Plan.QuotaLimits = quotaLimits
+	allowedModels, err := model.ValidateSubscriptionAllowedModels(req.Plan.AllowedModels)
+	if err != nil {
+		common.ApiErrorMsg(c, quotaLimitsErrorMessage(err))
+		return
+	}
+	req.Plan.AllowedModels = allowedModels
 
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		// update plan (allow zero values updates with map)
@@ -335,6 +349,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
 			"quota_limits":               req.Plan.QuotaLimits,
+			"allowed_models":             req.Plan.AllowedModels,
 			"updated_at":                 common.GetTimestamp(),
 		}
 		if req.Plan.AllowBalancePay != nil {
@@ -579,4 +594,146 @@ func AdminDeleteUserSubscription(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, nil)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-user subscription management (admin)
+// ---------------------------------------------------------------------------
+
+// AdminListSubscriptions lists subscriptions across every user so an
+// administrator can manage them in bulk instead of opening one user at a time.
+// Filters are optional query parameters; rows carry the owner's username and the
+// plan title plus that subscription's quota-limit counters.
+func AdminListSubscriptions(c *gin.Context) {
+	filter := model.UserSubscriptionListFilter{
+		Status:     strings.TrimSpace(c.Query("status")),
+		Keyword:    strings.TrimSpace(c.Query("keyword")),
+		ActiveOnly: strings.EqualFold(strings.TrimSpace(c.Query("active_only")), "true"),
+	}
+	if userId, err := strconv.Atoi(c.Query("user_id")); err == nil {
+		filter.UserId = userId
+	}
+	if planId, err := strconv.Atoi(c.Query("plan_id")); err == nil {
+		filter.PlanId = planId
+	}
+
+	pageInfo := common.GetPageQuery(c)
+	items, total, err := model.ListUserSubscriptions(filter, pageInfo)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(items)
+	common.ApiSuccess(c, pageInfo)
+}
+
+type AdminBatchSubscriptionIdsRequest struct {
+	Ids []int `json:"ids"`
+}
+
+type AdminBatchGrantSubscriptionRequest struct {
+	UserIds []int `json:"user_ids"`
+	PlanId  int   `json:"plan_id"`
+}
+
+type AdminBatchResetSubscriptionRequest struct {
+	Ids              []int `json:"ids"`
+	AdvanceResetTime *bool `json:"advance_reset_time"`
+}
+
+// subscriptionBatchAuditMaxIds bounds how many target ids an audit entry lists.
+// Counts alone are not enough to reconstruct a destructive batch afterwards, and
+// the id list is what lets an operator tell exactly which subscriptions were
+// touched; the bound keeps a 500-entry batch from writing an unbounded payload.
+// Same shape as tokenBatchAuditParams.
+const subscriptionBatchAuditMaxIds = 100
+
+// respondSubscriptionBatch renders a batch result and records its audit entry.
+func respondSubscriptionBatch(c *gin.Context, action string, result *model.SubscriptionBatchResult, ids []int, extraAudit map[string]any) {
+	params := map[string]any{
+		"requested": result.Requested,
+		"succeeded": result.Succeeded,
+		"failed":    result.Failed,
+	}
+	if len(ids) > 0 {
+		params["requested_subscription_ids"] = append([]int{}, ids[:min(len(ids), subscriptionBatchAuditMaxIds)]...)
+		if len(ids) > subscriptionBatchAuditMaxIds {
+			params["requested_subscription_ids_truncated"] = true
+		}
+	}
+	for key, value := range extraAudit {
+		params[key] = value
+	}
+	recordManageAudit(c, action, params)
+	common.ApiSuccess(c, result)
+}
+
+func AdminBatchInvalidateSubscriptions(c *gin.Context) {
+	var req AdminBatchSubscriptionIdsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	result, err := model.BatchInvalidateUserSubscriptions(req.Ids)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	respondSubscriptionBatch(c, "subscription.batch_invalidate", result, req.Ids, nil)
+}
+
+func AdminBatchDeleteSubscriptions(c *gin.Context) {
+	var req AdminBatchSubscriptionIdsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	result, err := model.BatchDeleteUserSubscriptions(req.Ids)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	respondSubscriptionBatch(c, "subscription.batch_delete", result, req.Ids, nil)
+}
+
+func AdminBatchResetSubscriptions(c *gin.Context) {
+	var req AdminBatchResetSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	advance := resolveAdvanceResetTime(req.AdvanceResetTime)
+	result, err := model.BatchResetUserSubscriptions(req.Ids, advance)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	respondSubscriptionBatch(c, "subscription.batch_reset", result, req.Ids, map[string]any{
+		"advance_reset_time": advance,
+	})
+}
+
+// AdminBatchGrantSubscription grants one plan to many users. It carries the same
+// payment-compliance gate as AdminCreateUserSubscription: granting an existing
+// plan hands out paid entitlements, and an operator who has not confirmed
+// compliance must not be able to do that in bulk either.
+func AdminBatchGrantSubscription(c *gin.Context) {
+	if !requirePaymentCompliance(c) {
+		return
+	}
+
+	var req AdminBatchGrantSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	result, err := model.BatchGrantSubscriptionToUsers(req.UserIds, req.PlanId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	respondSubscriptionBatch(c, "subscription.batch_grant", result, req.UserIds, map[string]any{
+		"plan_id": req.PlanId,
+	})
 }

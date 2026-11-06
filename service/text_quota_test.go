@@ -1556,3 +1556,146 @@ func TestPreWssConsumeQuotaOAuthTokenFundsWallet(t *testing.T) {
 	assert.NotContains(t, err.Error(), "user quota is not enough",
 		"a non-zero token_id must still load the relay token and surface its lookup failure")
 }
+
+// A plan may whitelist the models its subscription quota covers. Such a model is
+// outside the subscription's scope rather than out of quota, so routing must
+// charge the wallet instead of failing the user, and must not treat the
+// allow_wallet_overflow switch as the deciding factor.
+func TestSubscriptionModelWhitelistRoutesToWallet(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldMainType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	model.DB, model.LOG_DB = db, db
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		common.SetDatabaseTypes(oldMainType, oldLogType)
+	})
+
+	require.NoError(t, db.AutoMigrate(
+		&model.User{}, &model.Token{}, &model.Channel{},
+		&model.SubscriptionPlan{}, &model.UserSubscription{},
+		&model.SubscriptionPreConsumeRecord{},
+	))
+
+	seedCase := func(t *testing.T, name string, allowed []string, strictOverflow bool) (int, int) {
+		t.Helper()
+		user := model.User{Username: name, AffCode: name + "-aff", Quota: 1_000_000, Status: common.UserStatusEnabled}
+		require.NoError(t, db.Create(&user).Error)
+		token := model.Token{UserId: user.Id, Key: name + "-key", Name: name, Status: common.TokenStatusEnabled, RemainQuota: 1_000_000}
+		require.NoError(t, db.Create(&token).Error)
+		plan := model.SubscriptionPlan{
+			Title: name, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+			TotalAmount: 100_000, QuotaResetPeriod: model.SubscriptionResetNever,
+			AllowedModels: model.SubscriptionModelList(allowed),
+		}
+		require.NoError(t, db.Create(&plan).Error)
+		now := time.Now().Unix()
+		sub := model.UserSubscription{
+			UserId: user.Id, PlanId: plan.Id, AmountTotal: plan.TotalAmount,
+			StartTime: now - 60, EndTime: now + 86400, Status: "active",
+			AllowWalletOverflow: !strictOverflow,
+		}
+		require.NoError(t, db.Create(&sub).Error)
+		return user.Id, token.Id
+	}
+
+	newInfo := func(userId, tokenId int, key, modelName, preference string) *relaycommon.RelayInfo {
+		return &relaycommon.RelayInfo{
+			UserId: userId, TokenId: tokenId, TokenKey: key,
+			ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 1},
+			RequestId:       "req-" + key,
+			OriginModelName: modelName,
+			RelayFormat:     types.RelayFormatOpenAI,
+			UserGroup:       "default", UsingGroup: "default",
+			UserSetting:     dto.UserSetting{BillingPreference: preference},
+			ForcePreConsume: true,
+			StartTime:       time.Now(),
+		}
+	}
+
+	testCases := []struct {
+		name          string
+		allowed       []string
+		strict        bool
+		preference    string
+		model         string
+		wantSource    string
+		wantErrorCode types.ErrorCode // empty means the request must succeed
+	}{
+		{
+			name:    "subscription_first falls back to the wallet for a model outside the whitelist",
+			allowed: []string{"gpt-5.5"}, preference: "subscription_first", model: "gemini-2.0",
+			wantSource: BillingSourceWallet,
+		},
+		{
+			name:    "the wallet fallback ignores allow_wallet_overflow because nothing ran out",
+			allowed: []string{"gpt-5.5"}, strict: true, preference: "subscription_first", model: "gemini-2.0",
+			wantSource: BillingSourceWallet,
+		},
+		{
+			name:    "subscription_first still uses the subscription for a whitelisted model",
+			allowed: []string{"gpt-5.5", "claude-*"}, preference: "subscription_first", model: "claude-sonnet-4",
+			wantSource: BillingSourceSubscription,
+		},
+		{
+			name:    "subscription_only refuses a model outside the whitelist with a distinct code",
+			allowed: []string{"gpt-5.5"}, strict: true, preference: "subscription_only", model: "gemini-2.0",
+			wantErrorCode: types.ErrorCodeSubscriptionModelNotAllowed,
+		},
+		{
+			name:    "no whitelist keeps the legacy behavior for every model",
+			allowed: nil, preference: "subscription_first", model: "gemini-2.0",
+			wantSource: BillingSourceSubscription,
+		},
+		{
+			name:    "an exhausted subscription still reports insufficient quota, not model-not-allowed",
+			allowed: []string{"gpt-5.5"}, strict: true, preference: "subscription_only", model: "gpt-5.5",
+			wantErrorCode: types.ErrorCodeInsufficientUserQuota,
+		},
+	}
+
+	for index, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			name := fmt.Sprintf("whitelist_case_%d", index)
+			userId, tokenId := seedCase(t, name, tc.allowed, tc.strict)
+			if tc.wantErrorCode == types.ErrorCodeInsufficientUserQuota {
+				// Burn the whole subscription quota so the only reason to refuse
+				// is that the money is gone, not that the model is excluded.
+				require.NoError(t, db.Model(&model.UserSubscription{}).
+					Where("user_id = ?", userId).Update("amount_used", 100_000).Error)
+			}
+
+			info := newInfo(userId, tokenId, name+"-key", tc.model, tc.preference)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+
+			var usedBefore model.UserSubscription
+			require.NoError(t, db.Where("user_id = ?", userId).First(&usedBefore).Error)
+
+			apiErr := PreConsumeBilling(ctx, 1_000, info)
+			if tc.wantErrorCode != "" {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, tc.wantErrorCode, apiErr.GetErrorCode())
+				// A refused request must not have touched either funding source:
+				// neither the wallet balance nor the subscription counter moves.
+				var sub model.UserSubscription
+				require.NoError(t, db.Where("user_id = ?", userId).First(&sub).Error)
+				assert.EqualValues(t, usedBefore.AmountUsed, sub.AmountUsed)
+				walletQuota, walletErr := model.GetUserQuota(userId, true)
+				require.NoError(t, walletErr)
+				assert.EqualValues(t, 1_000_000, walletQuota)
+				return
+			}
+			require.Nil(t, apiErr)
+			require.NotNil(t, info.Billing)
+			assert.Equal(t, tc.wantSource, info.BillingSource)
+		})
+	}
+}

@@ -554,6 +554,17 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   'subscription.plan_create': 'Created a subscription plan',
   'subscription.plan_update': 'Updated a subscription plan',
   'subscription.bind': 'Bound a subscription',
+  'subscription.plan_reset': 'Reset subscriptions for plan {{plan_id}}',
+  'subscription.user_plan_reset':
+    'Reset plan {{plan_id}} subscriptions for user {{target_user_id}}',
+  'subscription.batch_grant':
+    'Granted plan {{plan_id}} to {{requested}} user(s), {{succeeded}} succeeded',
+  'subscription.batch_invalidate':
+    'Invalidated {{requested}} subscription(s), {{succeeded}} succeeded',
+  'subscription.batch_reset':
+    'Reset {{requested}} subscription(s), {{succeeded}} succeeded',
+  'subscription.batch_delete':
+    'Deleted {{requested}} subscription(s), {{succeeded}} succeeded',
   // Logs
   'log.clear': 'Cleared historical logs',
   'log.cleanup_start': 'Log cleanup task started.',

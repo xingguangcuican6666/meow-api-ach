@@ -131,6 +131,16 @@ export function auditFieldLabel(key: string, t: TFunction): string {
       return t('User Count')
     case 'advance_reset_time':
       return t('Advance next reset time')
+    case 'requested':
+      return t('Requested')
+    case 'succeeded':
+      return t('Succeeded')
+    case 'failed':
+      return t('Failed')
+    case 'requested_subscription_ids':
+      return t('Requested subscription IDs')
+    case 'requested_subscription_ids_truncated':
+      return t('Requested subscription IDs truncated')
     case 'bindingType':
       return t('Binding Type')
     case 'from':

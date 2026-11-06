@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import {
+  Boxes,
   CalendarClock,
   CreditCard,
   Gauge,
@@ -767,6 +768,49 @@ export function SubscriptionsMutateDrawer({
                   )}
                 />
               </div>
+            </SideDrawerSection>
+
+            {/* Allowed models: which models may spend this plan's subscription
+                quota at all. Distinct from a limit's own Models scope below —
+                this one gates TotalAmount too. */}
+            <SideDrawerSection>
+              <h3 className='flex items-center gap-2 text-sm font-medium'>
+                <IconBadge tone='info' size='xs'>
+                  <Boxes />
+                </IconBadge>
+                {t('Allowed Models')}
+              </h3>
+
+              <FormField
+                control={form.control}
+                name='allowed_models'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Models that may use this subscription')}
+                    </FormLabel>
+                    <FormControl>
+                      <MultiSelect
+                        options={modelOptions.map((m) => ({
+                          label: m,
+                          value: m,
+                        }))}
+                        selected={field.value || []}
+                        onChange={field.onChange}
+                        allowCreate
+                        createLabel='Use "{{value}}"'
+                        placeholder={t('Select models (empty for allow all)')}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Empty allows every model. Once models are listed, only they can spend this plan quota: other models fall back to the wallet, or are rejected when the user is on subscription-only billing, and never consume the total quota.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </SideDrawerSection>
 
             {/* Extra Quota Limits: 5h / 7d / per-model caps that all apply at

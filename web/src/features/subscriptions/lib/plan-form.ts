@@ -56,6 +56,8 @@ export function getPlanFormSchema(t: TFunction) {
     allow_wallet_overflow: z.boolean(),
     max_purchase_per_user: z.coerce.number().min(0),
     total_amount: z.coerce.number().min(0),
+    // Whitelist of models this plan's quota may be spent on; empty = all models.
+    allowed_models: z.array(z.string()),
     quota_limits: z.array(quotaLimitFormSchema),
     upgrade_group: z.string().optional(),
     downgrade_group: z.string().optional(),
@@ -82,6 +84,7 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   allow_wallet_overflow: true,
   max_purchase_per_user: 0,
   total_amount: 0,
+  allowed_models: [],
   quota_limits: [],
   upgrade_group: '',
   downgrade_group: '',
@@ -106,6 +109,7 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     allow_wallet_overflow: plan.allow_wallet_overflow !== false,
     max_purchase_per_user: Number(plan.max_purchase_per_user || 0),
     total_amount: quotaUnitsToDollars(Number(plan.total_amount || 0)),
+    allowed_models: plan.allowed_models || [],
     quota_limits: (plan.quota_limits || []).map((limit) => ({
       key: limit.key || '',
       name: limit.name || '',
@@ -137,6 +141,9 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
       sort_order: Number(values.sort_order || 0),
       max_purchase_per_user: Number(values.max_purchase_per_user || 0),
       total_amount: parseQuotaFromDollars(Number(values.total_amount || 0)),
+      allowed_models: (values.allowed_models || [])
+        .map((model) => model.trim())
+        .filter(Boolean),
       quota_limits: (values.quota_limits || []).map((limit, index) => ({
         key: (limit.key || '').trim() || `limit-${index + 1}`,
         name: (limit.name || '').trim(),

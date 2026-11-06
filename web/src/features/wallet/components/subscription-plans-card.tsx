@@ -50,8 +50,10 @@ import {
   getSelfSubscriptionFull,
   updateBillingPreference,
 } from '@/features/subscriptions/api'
+import { AllowedModelsLabel } from '@/features/subscriptions/components/allowed-models-label'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
 import {
+  formatAllowedModels,
   formatDuration,
   formatQuotaLimitLabel,
   formatResetPeriod,
@@ -484,6 +486,20 @@ export function SubscriptionPlansCard({
                           {new Date(nextResetTime * 1000).toLocaleString()}
                         </div>
                       )}
+                      {/* A scoped subscription does not cover every model. Say
+                          so here: on subscription-only billing a model outside
+                          the whitelist is rejected rather than billed, so the
+                          user must be able to see the scope before sending a
+                          request. A count plus tooltip keeps a long whitelist
+                          from stretching the card. */}
+                      {isActive && (
+                        <AllowedModelsLabel
+                          allowed={sub.allowed_models}
+                          hideWhenUnscoped
+                          asCount
+                          className='mt-1 text-xs'
+                        />
+                      )}
                       <div className='text-muted-foreground mt-1'>
                         {t('Total Quota')}:{' '}
                         {totalAmount > 0 ? (
@@ -606,6 +622,11 @@ export function SubscriptionPlansCard({
                         : t('Unlimited')
                     }`
                 ),
+                // A whitelist changes what the buyer gets, so it belongs in
+                // the benefits list next to the quota itself.
+                (plan.allowed_models?.length ?? 0) > 0
+                  ? `${t('Allowed Models')}: ${formatAllowedModels(plan.allowed_models, t)}`
+                  : null,
                 limit > 0 ? `${t('Purchase Limit')}: ${limit}` : null,
                 plan.upgrade_group
                   ? `${t('Upgrade Group')}: ${plan.upgrade_group}`

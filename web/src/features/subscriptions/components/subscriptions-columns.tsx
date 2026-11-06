@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type ColumnDef } from '@tanstack/react-table'
+import type { ColumnDef } from '@tanstack/react-table'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -32,6 +32,7 @@ import {
   formatResetPeriod,
 } from '../lib'
 import type { PlanRecord } from '../types'
+import { AllowedModelsLabel } from './allowed-models-label'
 import { DataTableRowActions } from './data-table-row-actions'
 
 export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
@@ -190,6 +191,12 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
                     .join(' · ')}
                 </span>
               )}
+              {/* A scoped plan may spend quota only on the listed models, which
+                  is what decides whether it is usable for a given user. */}
+              <AllowedModelsLabel
+                allowed={row.original.plan.allowed_models}
+                className='text-xs'
+              />
             </div>
           )
         },

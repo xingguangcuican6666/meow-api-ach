@@ -548,6 +548,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`quota_reset_period`" + ` varchar(16) DEFAULT 'never',
 ` + "`quota_reset_custom_seconds`" + ` bigint DEFAULT 0,
 ` + "`quota_limits`" + ` text,
+` + "`allowed_models`" + ` text,
 ` + "`created_at`" + ` bigint,
 ` + "`updated_at`" + ` bigint,
 PRIMARY KEY (` + "`id`" + `)
@@ -586,6 +587,7 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "quota_reset_period", DDL: "`quota_reset_period` varchar(16) DEFAULT 'never'"},
 		{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
 		{Name: "quota_limits", DDL: "`quota_limits` text"},
+		{Name: "allowed_models", DDL: "`allowed_models` text"},
 		{Name: "created_at", DDL: "`created_at` bigint"},
 		{Name: "updated_at", DDL: "`updated_at` bigint"},
 	}

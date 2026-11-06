@@ -16,20 +16,63 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type Table } from '@tanstack/react-table'
+import type { Table } from '@tanstack/react-table'
+import { CreditCard } from 'lucide-react'
+import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
+import { Button } from '@/components/ui/button'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { GrantPlanDialog } from '@/features/subscriptions/components/dialogs/grant-plan-dialog'
 
-import { type User } from '../types'
+import type { User } from '../types'
 
 interface DataTableBulkActionsProps {
   table: Table<User>
 }
 
 export function DataTableBulkActions({ table }: DataTableBulkActionsProps) {
+  const { t } = useTranslation()
+  const [grantOpen, setGrantOpen] = useState(false)
+  const selectedUsers = table
+    .getFilteredSelectedRowModel()
+    .rows.map((row) => row.original)
+
   return (
-    <BulkActionsToolbar table={table} entityName='user'>
-      <></>
-    </BulkActionsToolbar>
+    <>
+      <BulkActionsToolbar table={table} entityName='user'>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='outline'
+                size='icon'
+                className='size-8'
+                aria-label={t('Grant subscription plan')}
+                onClick={() => setGrantOpen(true)}
+              />
+            }
+          >
+            <CreditCard aria-hidden='true' />
+          </TooltipTrigger>
+          <TooltipContent>{t('Grant subscription plan')}</TooltipContent>
+        </Tooltip>
+      </BulkActionsToolbar>
+
+      <GrantPlanDialog
+        open={grantOpen}
+        onOpenChange={setGrantOpen}
+        users={selectedUsers.map((user) => ({
+          id: user.id,
+          username: user.username,
+        }))}
+        onSuccess={() => table.resetRowSelection()}
+      />
+    </>
   )
 }

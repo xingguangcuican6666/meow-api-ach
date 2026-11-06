@@ -194,6 +194,14 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionAdminRoute.POST("/users/:id/subscriptions/reset", controller.AdminResetUserSubscriptionsByPlan)
 			subscriptionAdminRoute.POST("/user_subscriptions/:id/invalidate", controller.AdminInvalidateUserSubscription)
 			subscriptionAdminRoute.DELETE("/user_subscriptions/:id", controller.AdminDeleteUserSubscription)
+
+			// Cross-user subscription management (admin): list every user's
+			// subscriptions and act on many of them at once.
+			subscriptionAdminRoute.GET("/subscriptions", controller.AdminListSubscriptions)
+			subscriptionAdminRoute.POST("/subscriptions/grant", controller.AdminBatchGrantSubscription)
+			subscriptionAdminRoute.POST("/subscriptions/invalidate", controller.AdminBatchInvalidateSubscriptions)
+			subscriptionAdminRoute.POST("/subscriptions/reset", controller.AdminBatchResetSubscriptions)
+			subscriptionAdminRoute.POST("/subscriptions/delete", controller.AdminBatchDeleteSubscriptions)
 		}
 
 		// Subscription payment callbacks (no auth)

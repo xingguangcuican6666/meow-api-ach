@@ -92,6 +92,11 @@ const (
 	// quota error
 	ErrorCodeInsufficientUserQuota      ErrorCode = "insufficient_user_quota"
 	ErrorCodePreConsumeTokenQuotaFailed ErrorCode = "pre_consume_token_quota_failed"
+	// ErrorCodeSubscriptionModelNotAllowed marks a request whose model is outside
+	// every active subscription's model whitelist. It is distinct from
+	// ErrorCodeInsufficientUserQuota because nothing ran out: the subscription
+	// simply does not cover the model, so routing may use another funding source.
+	ErrorCodeSubscriptionModelNotAllowed ErrorCode = "subscription_model_not_allowed"
 )
 
 type NewAPIError struct {

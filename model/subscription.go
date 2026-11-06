@@ -190,6 +190,12 @@ type SubscriptionPlan struct {
 	// window, a 7 day window, a per-model quota, or any combination of them.
 	QuotaLimits SubscriptionQuotaLimits `json:"quota_limits" gorm:"type:text"`
 
+	// AllowedModels is the whitelist of models this plan's quota may be spent
+	// on. Empty means every model, so plans created before this field behave as
+	// before. A model outside the list cannot use this subscription at all and
+	// never draws down TotalAmount or a limit counter.
+	AllowedModels SubscriptionModelList `json:"allowed_models" gorm:"type:text"`
+
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
 }
@@ -308,6 +314,10 @@ type SubscriptionSummary struct {
 	// subscription's counters, so the UIs show 5h / 7d / per-model usage
 	// without loading the plan themselves.
 	QuotaLimits []SubscriptionLimitUsage `json:"quota_limits,omitempty"`
+	// AllowedModels is the plan's model whitelist, copied here for the same
+	// reason: a user should be able to see which models this subscription pays
+	// for without fetching the plan. Omitted when the plan covers every model.
+	AllowedModels []string `json:"allowed_models,omitempty"`
 }
 
 type SubscriptionResetResult struct {
@@ -516,7 +526,11 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			return nil, errors.New("已达到该套餐购买上限")
 		}
 	}
-	nowUnix := GetDBTimestamp()
+	// Read the clock on the transaction: this function is always called inside
+	// DB.Transaction, and on a single-connection database (SQLite) a clock query
+	// through the shared handle would wait forever for the connection this
+	// transaction is holding.
+	nowUnix := GetDBTimestampTx(tx)
 	now := time.Unix(nowUnix, 0)
 	endUnix, err := calcPlanEndTime(now, plan)
 	if err != nil {
@@ -933,12 +947,15 @@ func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
 		subCopy := sub
 		plan, err := getSubscriptionPlanByIdTx(nil, sub.PlanId)
 		var limits []SubscriptionLimitUsage
+		var allowed []string
 		if err == nil {
 			limits = buildSubscriptionLimitUsage(plan, &subCopy, now)
+			allowed = plan.GetAllowedModels()
 		}
 		result = append(result, SubscriptionSummary{
-			Subscription: &subCopy,
-			QuotaLimits:  limits,
+			Subscription:  &subCopy,
+			QuotaLimits:   limits,
+			AllowedModels: allowed,
 		})
 	}
 	return result
@@ -1400,11 +1417,24 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		// The reason the last rejected subscription ran out keeps the error
 		// message informative instead of a bare "insufficient".
 		var blockedErr error
+		// A plan may whitelist the models its quota covers. Those plans are
+		// skipped for a request outside the list rather than charged, so the
+		// whitelist never silently burns quota on models it excludes. When no
+		// active plan covers the model the error is distinguishable from
+		// "quota insufficient": the billing layer uses it to route the request
+		// to the wallet instead of reporting an exhausted subscription.
+		var notAllowedErr error
 		for _, candidate := range subs {
 			sub := candidate
 			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
 			if err != nil {
 				return err
+			}
+			if !plan.AllowsModel(modelName) {
+				if notAllowedErr == nil {
+					notAllowedErr = subscriptionModelNotAllowedError(plan, strings.TrimSpace(modelName))
+				}
+				continue
 			}
 			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
 				return err
@@ -1460,6 +1490,9 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		}
 		if blockedErr != nil {
 			return blockedErr
+		}
+		if notAllowedErr != nil {
+			return notAllowedErr
 		}
 		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
 	})

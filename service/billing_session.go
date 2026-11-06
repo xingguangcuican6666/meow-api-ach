@@ -238,6 +238,13 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
+		// A model outside every active subscription's whitelist is not a quota
+		// problem: nothing ran out, the subscription simply does not cover the
+		// model. Report it distinctly so NewBillingSession can route the request
+		// to another funding source instead of failing the user.
+		if errors.Is(err, model.ErrSubscriptionModelNotAllowed) {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeSubscriptionModelNotAllowed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
 			return types.NewErrorWithStatusCode(fmt.Errorf("订阅额度不足或未配置订阅: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
@@ -449,6 +456,13 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return session, nil
 	}
 
+	// 套餐可以配置「可用模型」白名单。白名单之外的模型根本不属于订阅范围，
+	// 因此不算额度耗尽：subscription_first 直接回退钱包（不受 allow_wallet_overflow
+	// 限制，因为它约束的是"额度用完后"的回退），subscription_only 明确拒绝。
+	modelNotCovered := func(apiErr *types.NewAPIError) bool {
+		return apiErr != nil && apiErr.GetErrorCode() == types.ErrorCodeSubscriptionModelNotAllowed
+	}
+
 	switch pref {
 	case "subscription_only":
 		return trySubscription()
@@ -475,6 +489,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		}
 		session, apiErr := trySubscription()
 		if apiErr != nil {
+			if modelNotCovered(apiErr) {
+				return tryWallet()
+			}
 			if apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
 				// 仅当用户的活跃订阅允许钱包回退时才回退到钱包，否则返回订阅额度不足错误
 				allowOverflow, overflowErr := model.UserActiveSubscriptionsAllowWalletOverflow(relayInfo.UserId)

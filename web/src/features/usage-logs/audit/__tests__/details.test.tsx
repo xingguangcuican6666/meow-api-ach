@@ -699,3 +699,85 @@ it('shows the affected count separately from requested redemption IDs', async ()
     ])
   )
 })
+
+// A batch subscription action must render a localized summary from its
+// structured action+params, and name the counts and the id list it records.
+// Without the template the audit viewer falls back to the English `content`
+// field, so this is what proves the operator sees the batch in their language.
+it.each([
+  [
+    'subscription.batch_grant',
+    { plan_id: 7, requested: 3, succeeded: 2, failed: 1 },
+    '向 3 位用户授予套餐 7，成功 2 位',
+  ],
+  [
+    'subscription.batch_invalidate',
+    { requested: 2, succeeded: 2, failed: 0 },
+    '作废 2 个订阅，成功 2 个',
+  ],
+  [
+    'subscription.batch_reset',
+    { requested: 4, succeeded: 3, failed: 1 },
+    '重置 4 个订阅，成功 3 个',
+  ],
+  [
+    'subscription.batch_delete',
+    { requested: 1, succeeded: 1, failed: 0 },
+    '删除 1 个订阅，成功 1 个',
+  ],
+])(
+  'renders subscription batch audit %s in the interface language',
+  async (action, params, summary) => {
+    const i18n = createInstance()
+    await i18n.init({ lng: 'zh', resources: { zh } })
+    const detail = buildAuditDetails(
+      {
+        ...entry,
+        action,
+        route: `/api/subscription/admin/subscriptions`,
+        method: 'POST',
+        other: { op: { action, params } },
+      },
+      i18n.t
+    )
+    expect(detail.summary).toBe(summary)
+  }
+)
+
+it('labels the batch counters and the requested subscription ids', async () => {
+  const i18n = createInstance()
+  await i18n.init({ lng: 'en', resources: {} })
+  const detail = buildAuditDetails(
+    {
+      ...entry,
+      action: 'subscription.batch_delete',
+      route: '/api/subscription/admin/subscriptions/delete',
+      method: 'POST',
+      other: {
+        op: {
+          action: 'subscription.batch_delete',
+          params: {
+            requested: 2,
+            succeeded: 1,
+            failed: 1,
+            requested_subscription_ids: [11, 12],
+            requested_subscription_ids_truncated: true,
+          },
+        },
+      },
+    },
+    i18n.t
+  )
+  expect(detail.fields).toEqual(
+    expect.arrayContaining([
+      { label: 'Requested', value: 2 },
+      { label: 'Succeeded', value: 1 },
+      { label: 'Failed', value: 1 },
+      { label: 'Requested subscription IDs', value: [11, 12] },
+      {
+        label: 'Requested subscription IDs truncated',
+        value: true,
+      },
+    ])
+  )
+})

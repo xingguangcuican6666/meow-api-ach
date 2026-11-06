@@ -68,6 +68,12 @@ export const subscriptionPlanSchema = z.object({
   allow_wallet_overflow: z.boolean().optional().default(true),
   max_purchase_per_user: z.number(),
   total_amount: z.number(),
+  /**
+   * Whitelist of models this plan's subscription quota may be spent on.
+   * Absent or empty means every model, which is how plans behaved before the
+   * field existed. A model outside the list never draws down this plan.
+   */
+  allowed_models: z.array(z.string()).optional(),
   quota_limits: z.array(subscriptionQuotaLimitSchema).optional(),
   upgrade_group: z.string().optional(),
   downgrade_group: z.string().optional(),
@@ -105,6 +111,83 @@ export interface UserSubscriptionRecord {
   subscription: UserSubscription
   /** Caps configured on the plan with this subscription's counters. */
   quota_limits?: SubscriptionLimitUsage[]
+  /**
+   * The plan's model whitelist. Absent means the plan covers every model; a
+   * present list means only those models may spend this subscription.
+   */
+  allowed_models?: string[]
+}
+
+/**
+ * One row of the cross-user admin subscription list. The owner's username and
+ * the plan title are resolved server-side so the table needs no per-row lookup.
+ */
+export interface SubscriptionListItem extends UserSubscriptionRecord {
+  user_id: number
+  username: string
+  plan_id: number
+  plan_title: string
+}
+
+// ============================================================================
+// Cross-user Subscription Management
+// ============================================================================
+
+export const SUBSCRIPTION_STATUS_VALUES = [
+  'active',
+  'expired',
+  'cancelled',
+] as const
+
+export type SubscriptionStatusValue =
+  (typeof SUBSCRIPTION_STATUS_VALUES)[number]
+
+export interface ListSubscriptionsParams {
+  p?: number
+  page_size?: number
+  keyword?: string
+  status?: string
+  plan_id?: number
+  user_id?: number
+  active_only?: boolean
+}
+
+export interface ListSubscriptionsResponse {
+  success: boolean
+  message?: string
+  data?: {
+    page: number
+    page_size: number
+    total: number
+    items: SubscriptionListItem[]
+  }
+}
+
+/** What happened to one entry of a batch operation. */
+export interface SubscriptionBatchItemOutcome {
+  id?: number
+  user_id?: number
+  /** Set on a grant entry, where the target is a user rather than a row. */
+  plan_id?: number
+  ok: boolean
+  message?: string
+}
+
+export interface SubscriptionBatchResult {
+  requested: number
+  succeeded: number
+  failed: number
+  items: SubscriptionBatchItemOutcome[]
+}
+
+export interface BatchGrantSubscriptionsRequest {
+  user_ids: number[]
+  plan_id: number
+}
+
+export interface BatchResetSubscriptionsRequest {
+  ids: number[]
+  advance_reset_time: boolean
 }
 
 // ============================================================================

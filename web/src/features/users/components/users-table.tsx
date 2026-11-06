@@ -174,6 +174,10 @@ export function UsersTable() {
     data: users,
     columns,
     enableRowSelection: true,
+    // Selection must be keyed by user id, not row index: bulk operations are
+    // applied to a snapshot of the selection, and a refetch or a page change
+    // would otherwise shift which user an index points at.
+    getRowId: (row) => String(row.id),
     columnFilters,
     globalFilter,
     pagination,

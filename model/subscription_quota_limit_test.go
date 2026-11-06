@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -739,6 +740,7 @@ func runSubscriptionLimitMigration(t *testing.T, db *gorm.DB, dialect common.Dat
 
 	// ---- the new columns exist and hold JSON, the old data is intact ----
 	assert.True(t, db.Migrator().HasColumn(&SubscriptionPlan{}, "quota_limits"))
+	assert.True(t, db.Migrator().HasColumn(&SubscriptionPlan{}, "allowed_models"))
 	assert.True(t, db.Migrator().HasColumn(&UserSubscription{}, "quota_limit_states"))
 	assert.True(t, db.Migrator().HasColumn(&SubscriptionPreConsumeRecord{}, "limit_refs"))
 
@@ -748,6 +750,8 @@ func runSubscriptionLimitMigration(t *testing.T, db *gorm.DB, dialect common.Dat
 	assert.EqualValues(t, 5000, legacyPlan.TotalAmount)
 	assert.Equal(t, SubscriptionResetDaily, legacyPlan.QuotaResetPeriod)
 	assert.Nil(t, legacyPlan.QuotaLimits, "an upgraded row must read as having no limits")
+	assert.Nil(t, legacyPlan.AllowedModels, "an upgraded row must read as covering every model")
+	assert.True(t, legacyPlan.AllowsModel("anything"), "no whitelist means every model may spend the plan")
 
 	var legacySub UserSubscription
 	require.NoError(t, db.Where("id = ?", 7702).First(&legacySub).Error)
@@ -767,7 +771,10 @@ func runSubscriptionLimitMigration(t *testing.T, db *gorm.DB, dialect common.Dat
 	})
 	require.NoError(t, err)
 	require.NoError(t, db.Model(&SubscriptionPlan{}).Where("id = ?", 7701).
-		Update("quota_limits", SubscriptionQuotaLimits(limits)).Error)
+		Updates(map[string]any{
+			"quota_limits":   SubscriptionQuotaLimits(limits),
+			"allowed_models": SubscriptionModelList{"claude-*", "gpt-5.5"},
+		}).Error)
 	require.NoError(t, db.Model(&UserSubscription{}).Where("id = ?", 7702).
 		Update("quota_limit_states", SubscriptionQuotaLimitStates{
 			{Key: "limit-1", Used: 40, WindowFrom: 1700000000},
@@ -785,6 +792,7 @@ func runSubscriptionLimitMigration(t *testing.T, db *gorm.DB, dialect common.Dat
 	assert.EqualValues(t, SubscriptionLimitWindow7d, reloadedPlan.QuotaLimits[1].WindowSeconds)
 	assert.Equal(t, []string{"claude-*"}, reloadedPlan.QuotaLimits[2].Models)
 	assert.Equal(t, "模型独立", reloadedPlan.QuotaLimits[2].Name)
+	assert.Equal(t, []string{"claude-*", "gpt-5.5"}, reloadedPlan.GetAllowedModels())
 
 	var reloadedSub UserSubscription
 	require.NoError(t, db.Where("id = ?", 7702).First(&reloadedSub).Error)
@@ -798,11 +806,13 @@ func runSubscriptionLimitMigration(t *testing.T, db *gorm.DB, dialect common.Dat
 	assert.Equal(t, "limit-3", reloadedRecord.LimitRefs[1].Key)
 
 	// ---- NULL must keep decoding as "no limits" ----
-	require.NoError(t, db.Exec("UPDATE subscription_plans SET quota_limits = NULL WHERE id = ?", 7701).Error)
+	require.NoError(t, db.Exec("UPDATE subscription_plans SET quota_limits = NULL, allowed_models = NULL WHERE id = ?", 7701).Error)
 	require.NoError(t, db.Exec("UPDATE user_subscriptions SET quota_limit_states = NULL WHERE id = ?", 7702).Error)
 	var nulledPlan SubscriptionPlan
 	require.NoError(t, db.Where("id = ?", 7701).First(&nulledPlan).Error)
 	assert.Nil(t, nulledPlan.QuotaLimits)
+	assert.Nil(t, nulledPlan.AllowedModels)
+	assert.True(t, nulledPlan.AllowsModel("gpt-4o"))
 	var nulledSub UserSubscription
 	require.NoError(t, db.Where("id = ?", 7702).First(&nulledSub).Error)
 	assert.Nil(t, nulledSub.QuotaLimitStates)
@@ -825,6 +835,7 @@ func runSubscriptionLimitMigration(t *testing.T, db *gorm.DB, dialect common.Dat
 	require.NoError(t, fresh.Migrator().DropTable("subscription_plans_fresh", "user_subscriptions_fresh", "subscription_pre_consume_records_fresh"))
 	require.NoError(t, fresh.AutoMigrate(&SubscriptionPlan{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}))
 	assert.True(t, fresh.Migrator().HasColumn(&SubscriptionPlan{}, "quota_limits"))
+	assert.True(t, fresh.Migrator().HasColumn(&SubscriptionPlan{}, "allowed_models"))
 	assert.True(t, fresh.Migrator().HasColumn(&UserSubscription{}, "quota_limit_states"))
 	assert.True(t, fresh.Migrator().HasColumn(&SubscriptionPreConsumeRecord{}, "limit_refs"))
 }
@@ -998,4 +1009,255 @@ func TestSubscriptionQuotaLimitBillingFlowPostgreSQL(t *testing.T) {
 		t.Skip("TEST_POSTGRES_DSN is not configured")
 	}
 	runSubscriptionLimitBillingFlow(t, common.DatabaseTypePostgreSQL)
+}
+
+// The caps are conjunctive: a request is admitted only while every matching cap
+// still has room, so whichever cap fills first stops the subscription. This is
+// the operator-visible contract behind 「任意一个达到满就不能继续用订阅」, and it
+// holds for the whole-period total, each rolling window and each per-model
+// counter alike.
+func TestPreConsumeUserSubscriptionBlocksWhenAnyCapIsFull(t *testing.T) {
+	truncateTables(t)
+
+	const userId = 311
+	plan := seedQuotaLimitPlan(t, &SubscriptionPlan{
+		Id: 9311, Title: "Conjunctive", DurationUnit: SubscriptionDurationMonth, DurationValue: 1,
+		TotalAmount: 1000, QuotaResetPeriod: SubscriptionResetNever,
+		QuotaLimits: SubscriptionQuotaLimits{
+			{Key: "h5", Name: "5h", WindowSeconds: SubscriptionLimitWindow5h, AmountTotal: 100},
+			{Key: "d7", Name: "7天", WindowSeconds: SubscriptionLimitWindow7d, AmountTotal: 500},
+			{Key: "claude", Name: "Claude", WindowSeconds: SubscriptionLimitWindow5h, AmountTotal: 50, Models: []string{"claude-*"}},
+		},
+	})
+	subId := seedQuotaLimitSubscription(t, userId, plan.Id, plan.TotalAmount)
+
+	now := GetDBTimestamp()
+	window := func(key string, used int64) SubscriptionQuotaLimitState {
+		return SubscriptionQuotaLimitState{Key: key, Used: used, WindowFrom: now}
+	}
+
+	testCases := []struct {
+		name        string
+		states      SubscriptionQuotaLimitStates
+		amountUsed  int64
+		model       string
+		amount      int64
+		wantBlocked string // empty means the request must be admitted
+		// followUp drives a second request on the counters the first one left
+		// behind, so a boundary case can assert what happens right after it.
+		followUpAmount  int64
+		followUpBlocked string
+	}{
+		{
+			name:       "every cap has room",
+			states:     SubscriptionQuotaLimitStates{window("h5", 10), window("d7", 10)},
+			amountUsed: 10, model: "gpt-4o", amount: 10,
+		},
+		{
+			name:       "a full 5h window blocks even though the 7d window and the total have room",
+			states:     SubscriptionQuotaLimitStates{window("h5", 100), window("d7", 100)},
+			amountUsed: 100, model: "gpt-4o", amount: 1,
+			wantBlocked: "5h",
+		},
+		{
+			name:       "a full 7d window blocks even though the 5h window has room",
+			states:     SubscriptionQuotaLimitStates{window("h5", 0), window("d7", 500)},
+			amountUsed: 10, model: "gpt-4o", amount: 1,
+			wantBlocked: "7天",
+		},
+		{
+			name:       "an exhausted whole-period total blocks even though every window has room",
+			states:     SubscriptionQuotaLimitStates{window("h5", 0), window("d7", 0)},
+			amountUsed: 1000, model: "gpt-4o", amount: 1,
+			wantBlocked: "subscription quota insufficient",
+		},
+		{
+			name: "a full per-model counter blocks that model only",
+			states: SubscriptionQuotaLimitStates{
+				window("h5", 10), window("d7", 10),
+				{Key: "claude", Model: "claude-sonnet-4", Used: 50, WindowFrom: now},
+			},
+			amountUsed: 10, model: "claude-sonnet-4", amount: 1,
+			wantBlocked: "Claude",
+		},
+		{
+			name: "another model keeps its own counter and is still admitted",
+			states: SubscriptionQuotaLimitStates{
+				window("h5", 10), window("d7", 10),
+				{Key: "claude", Model: "claude-sonnet-4", Used: 50, WindowFrom: now},
+			},
+			amountUsed: 10, model: "claude-opus-4", amount: 10,
+		},
+		{
+			name:       "a request that exactly fills the remaining room is admitted and the next one is blocked",
+			states:     SubscriptionQuotaLimitStates{window("h5", 90), window("d7", 90)},
+			amountUsed: 90, model: "gpt-4o", amount: 10,
+			followUpAmount: 1, followUpBlocked: "5h",
+		},
+		{
+			name:       "a counter pushed past its cap by settlement keeps blocking",
+			states:     SubscriptionQuotaLimitStates{window("h5", 10), window("d7", 620)},
+			amountUsed: 10, model: "gpt-4o", amount: 1,
+			wantBlocked: "7天",
+		},
+		{
+			name: "an elapsed window restores room without touching the other windows",
+			states: SubscriptionQuotaLimitStates{
+				{Key: "h5", Used: 100, WindowFrom: now - SubscriptionLimitWindow5h - 1},
+				window("d7", 100),
+			},
+			amountUsed: 100, model: "gpt-4o", amount: 10,
+		},
+	}
+
+	for i, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", subId).Updates(map[string]any{
+				"amount_used":        tc.amountUsed,
+				"quota_limit_states": tc.states,
+			}).Error)
+
+			res, err := PreConsumeUserSubscription(fmt.Sprintf("conjunctive-%d", i), userId, tc.model, 0, tc.amount)
+			if tc.wantBlocked == "" {
+				require.NoError(t, err)
+				assert.EqualValues(t, tc.amount, res.PreConsumed)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "subscription quota insufficient")
+				assert.Contains(t, err.Error(), tc.wantBlocked)
+			}
+
+			if tc.followUpAmount == 0 {
+				return
+			}
+			_, err = PreConsumeUserSubscription(fmt.Sprintf("conjunctive-%d-follow", i), userId, tc.model, 0, tc.followUpAmount)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.followUpBlocked)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Plan model whitelist ("可用模型")
+// ---------------------------------------------------------------------------
+
+// The whitelist decides whether a model may spend the plan's subscription quota
+// at all, which is a separate concept from a limit's Models scope. A model
+// outside the list must not consume TotalAmount or any limit counter, and the
+// error must be distinguishable from "quota insufficient" so routing can fall
+// back to the wallet.
+func TestPreConsumeUserSubscriptionRespectsPlanModelWhitelist(t *testing.T) {
+	truncateTables(t)
+
+	const userId = 312
+	plan := seedQuotaLimitPlan(t, &SubscriptionPlan{
+		Id: 9312, Title: "Whitelisted", DurationUnit: SubscriptionDurationMonth, DurationValue: 1,
+		TotalAmount: 100, QuotaResetPeriod: SubscriptionResetNever,
+		AllowedModels: SubscriptionModelList{"gpt-5.5", "claude-*"},
+		QuotaLimits: SubscriptionQuotaLimits{
+			{Key: "d7", Name: "7天", WindowSeconds: SubscriptionLimitWindow7d, AmountTotal: 30},
+		},
+	})
+	subId := seedQuotaLimitSubscription(t, userId, plan.Id, plan.TotalAmount)
+
+	// A whitelisted model is admitted and charges both the total and the limit.
+	res, err := PreConsumeUserSubscription("whitelist-ok", userId, "gpt-5.5", 0, 10)
+	require.NoError(t, err)
+	assert.EqualValues(t, 10, res.PreConsumed)
+	d7, ok := quotaLimitState(t, subId, "d7", "")
+	require.True(t, ok)
+	assert.EqualValues(t, 10, d7.Used)
+	assert.EqualValues(t, 10, loadQuotaLimitSubscription(t, subId).AmountUsed)
+
+	// A model outside the whitelist is refused with the distinct sentinel error.
+	_, err = PreConsumeUserSubscription("whitelist-blocked", userId, "gemini-2.0", 0, 1)
+	require.ErrorIs(t, err, ErrSubscriptionModelNotAllowed)
+	assert.NotContains(t, err.Error(), "subscription quota insufficient")
+
+	// Nothing was charged by the refused request.
+	sub := loadQuotaLimitSubscription(t, subId)
+	assert.EqualValues(t, 10, sub.AmountUsed)
+	d7, _ = quotaLimitState(t, subId, "d7", "")
+	assert.EqualValues(t, 10, d7.Used)
+
+	// The wildcard entry still matches.
+	_, err = PreConsumeUserSubscription("whitelist-wildcard", userId, "claude-sonnet-4", 0, 5)
+	require.NoError(t, err)
+
+	// A request with no model name cannot be matched against a whitelist.
+	_, err = PreConsumeUserSubscription("whitelist-empty-model", userId, "  ", 0, 5)
+	require.ErrorIs(t, err, ErrSubscriptionModelNotAllowed)
+}
+
+// With several active subscriptions, a model outside one plan's whitelist falls
+// through to the next plan that does cover it, exactly like an exhausted quota
+// does. Only when no plan covers the model is the sentinel error returned.
+func TestPreConsumeUserSubscriptionFallsThroughToCoveringPlan(t *testing.T) {
+	truncateTables(t)
+
+	const userId = 313
+	narrow := seedQuotaLimitPlan(t, &SubscriptionPlan{
+		Id: 9313, Title: "Narrow", DurationUnit: SubscriptionDurationMonth, DurationValue: 1,
+		TotalAmount: 100, QuotaResetPeriod: SubscriptionResetNever,
+		AllowedModels: SubscriptionModelList{"gpt-5.5"},
+	})
+	broad := seedQuotaLimitPlan(t, &SubscriptionPlan{
+		Id: 9314, Title: "Broad", DurationUnit: SubscriptionDurationMonth, DurationValue: 1,
+		TotalAmount: 100, QuotaResetPeriod: SubscriptionResetNever,
+	})
+	narrowId := seedQuotaLimitSubscription(t, userId, narrow.Id, narrow.TotalAmount)
+	broadId := seedQuotaLimitSubscription(t, userId, broad.Id, broad.TotalAmount)
+
+	res, err := PreConsumeUserSubscription("fallthrough-1", userId, "gemini-2.0", 0, 7)
+	require.NoError(t, err)
+	assert.Equal(t, broadId, res.UserSubscriptionId, "the plan without a whitelist must cover the model")
+
+	// Both plans cover gpt-5.5. With equal end times the earlier-created
+	// subscription is charged first, so the narrow plan takes this one.
+	res, err = PreConsumeUserSubscription("fallthrough-2", userId, "gpt-5.5", 0, 7)
+	require.NoError(t, err)
+	assert.Equal(t, narrowId, res.UserSubscriptionId)
+	assert.EqualValues(t, 7, loadQuotaLimitSubscription(t, narrowId).AmountUsed)
+	assert.EqualValues(t, 7, loadQuotaLimitSubscription(t, broadId).AmountUsed)
+}
+
+// Admin input for the whitelist must be normalized and validated before it
+// becomes a routing decision.
+func TestValidateSubscriptionAllowedModels(t *testing.T) {
+	testCases := []struct {
+		name    string
+		input   []string
+		want    []string
+		wantErr error
+	}{
+		{name: "empty input clears the whitelist", input: nil, want: nil},
+		{
+			name:  "trims and drops blanks and duplicates",
+			input: []string{" gpt-5.5 ", "gpt-5.5", "  ", "claude-*"},
+			want:  []string{"gpt-5.5", "claude-*"},
+		},
+		{
+			name:    "blank-only input is rejected",
+			input:   []string{"  ", ""},
+			wantErr: ErrSubscriptionAllowedModelsInvalid,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ValidateSubscriptionAllowedModels(tc.input)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+
+	tooMany := make([]string, 0, subscriptionAllowedModelsMax+1)
+	for range subscriptionAllowedModelsMax + 1 {
+		tooMany = append(tooMany, "m")
+	}
+	_, err := ValidateSubscriptionAllowedModels(tooMany)
+	assert.ErrorIs(t, err, ErrSubscriptionAllowedModelsInvalid)
 }

@@ -22,6 +22,7 @@ export {
   formatTimestamp,
   formatQuotaLimitWindow,
   formatQuotaLimitLabel,
+  formatAllowedModels,
 } from './format'
 export {
   getPlanFormSchema,

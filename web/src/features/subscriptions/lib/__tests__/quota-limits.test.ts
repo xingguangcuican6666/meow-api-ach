@@ -20,7 +20,11 @@ import type { TFunction } from 'i18next'
 import { describe, expect, test } from 'vitest'
 
 import type { SubscriptionPlan } from '../../types'
-import { formatQuotaLimitLabel, formatQuotaLimitWindow } from '../format'
+import {
+  formatAllowedModels,
+  formatQuotaLimitLabel,
+  formatQuotaLimitWindow,
+} from '../format'
 import {
   PLAN_FORM_DEFAULTS,
   formValuesToPlanPayload,
@@ -160,5 +164,32 @@ describe('quota limit display formatting', () => {
 
   test('an unnamed limit falls back to the window label', () => {
     expect(formatQuotaLimitLabel({ window_seconds: 604800 }, t)).toBe('7 days')
+  })
+})
+
+describe('plan model whitelist', () => {
+  test('an absent whitelist reads as covering every model, not as a blank line', () => {
+    expect(formatAllowedModels(undefined, t)).toBe('All models')
+    expect(formatAllowedModels(null, t)).toBe('All models')
+    expect(formatAllowedModels([], t)).toBe('All models')
+  })
+
+  test('a scoped whitelist is listed verbatim in the configured order', () => {
+    expect(formatAllowedModels(['gpt-5.5', 'claude-*'], t)).toBe(
+      'gpt-5.5, claude-*'
+    )
+  })
+
+  test('a plan without a whitelist round trips as an empty list', () => {
+    const payload = formValuesToPlanPayload(planToFormValues(basePlan()))
+    expect(payload.plan.allowed_models).toEqual([])
+  })
+
+  test('whitespace-only entries are dropped so the whitelist cannot become blank', () => {
+    const values = planToFormValues(basePlan({ allowed_models: [' gpt-5.5 '] }))
+    expect(values.allowed_models).toEqual([' gpt-5.5 '])
+
+    const payload = formValuesToPlanPayload(values)
+    expect(payload.plan.allowed_models).toEqual(['gpt-5.5'])
   })
 })
