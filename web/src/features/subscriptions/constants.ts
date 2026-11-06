@@ -38,10 +38,28 @@ export const RESET_PERIODS = [
   { value: 'custom', labelKey: 'Custom (seconds)' },
 ] as const
 
+// Rolling windows an operator can attach to an extra quota limit. The seconds
+// match model.SubscriptionLimitWindow5h / SubscriptionLimitWindow7d.
+export const QUOTA_LIMIT_WINDOWS = [
+  { value: 0, labelKey: 'Whole subscription period' },
+  { value: 5 * 60 * 60, labelKey: '5 hours' },
+  { value: 7 * 24 * 60 * 60, labelKey: '7 days' },
+  { value: 60 * 60, labelKey: '1 hour' },
+  { value: 24 * 60 * 60, labelKey: '1 day' },
+  { value: 30 * 24 * 60 * 60, labelKey: '30 days' },
+] as const
+
 export function getDurationUnitOptions(t: TFunction) {
   return DURATION_UNITS.map((u) => ({ value: u.value, label: t(u.labelKey) }))
 }
 
 export function getResetPeriodOptions(t: TFunction) {
   return RESET_PERIODS.map((p) => ({ value: p.value, label: t(p.labelKey) }))
+}
+
+export function getQuotaLimitWindowOptions(t: TFunction) {
+  return QUOTA_LIMIT_WINDOWS.map((w) => ({
+    value: String(w.value),
+    label: t(w.labelKey),
+  }))
 }

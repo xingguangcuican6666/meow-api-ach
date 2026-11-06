@@ -429,6 +429,14 @@ export const STATIC_I18N_KEYS = [
   'Weekly',
   'Monthly',
 
+  // Subscription extra quota limit windows (dynamic labelKey)
+  'Whole subscription period',
+  '5 hours',
+  '7 days',
+  '1 hour',
+  '1 day',
+  '30 days',
+
   // CC Switch dialog
   'Import to CC Switch',
   'Open CC Switch',

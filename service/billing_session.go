@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -105,6 +106,7 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	tokenConsumed := s.tokenConsumed
 	extraReserved := s.extraReserved
 	subscriptionId := s.relayInfo.SubscriptionId
+	limitRefs := s.subscriptionLimitRefs()
 	funding := s.funding
 
 	gopool.Go(func() {
@@ -113,7 +115,7 @@ func (s *BillingSession) Refund(c *gin.Context) {
 			common.SysLog("error refunding billing source: " + err.Error())
 		}
 		if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
-			if err := model.PostConsumeUserSubscriptionDelta(subscriptionId, -int64(extraReserved)); err != nil {
+			if err := model.PostConsumeUserSubscriptionDeltaWithLimits(subscriptionId, -int64(extraReserved), limitRefs); err != nil {
 				common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
 			}
 		}
@@ -275,7 +277,7 @@ func (s *BillingSession) reserveFunding(delta int, requireAvailableQuota bool) e
 		funding.consumed += delta
 		return nil
 	case *SubscriptionFunding:
-		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, int64(delta)); err != nil {
+		if err := model.PostConsumeUserSubscriptionDeltaWithLimits(funding.subscriptionId, int64(delta), s.subscriptionLimitRefs()); err != nil {
 			return types.NewErrorWithStatusCode(
 				fmt.Errorf("订阅额度不足或未配置订阅: %s", err.Error()),
 				types.ErrorCodeInsufficientUserQuota,
@@ -299,10 +301,20 @@ func (s *BillingSession) rollbackFundingReserve(delta int) {
 			funding.consumed -= delta
 		}
 	case *SubscriptionFunding:
-		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, -int64(delta)); err != nil {
+		if err := model.PostConsumeUserSubscriptionDeltaWithLimits(funding.subscriptionId, -int64(delta), s.subscriptionLimitRefs()); err != nil {
 			common.SysLog("error rolling back subscription funding reserve: " + err.Error())
 		}
 	}
+}
+
+// subscriptionLimitRefs returns the quota-limit counters this session must
+// adjust alongside amount_used. They come from the funding reservation so a
+// settle or refund always lands on the counters the pre-consume charged.
+func (s *BillingSession) subscriptionLimitRefs() []hosttypes.SubscriptionLimitRef {
+	if sub, ok := s.funding.(*SubscriptionFunding); ok {
+		return sub.limitRefs
+	}
+	return nil
 }
 
 func (s *BillingSession) reserveToken(delta int) error {
@@ -365,9 +377,11 @@ func (s *BillingSession) syncRelayInfo() {
 		info.SubscriptionAmountUsedAfterPreConsume = sub.AmountUsedAfter + int64(s.extraReserved)
 		info.SubscriptionPlanId = sub.PlanId
 		info.SubscriptionPlanTitle = sub.PlanTitle
+		info.SubscriptionLimitRefs = sub.limitRefs
 	} else {
 		info.SubscriptionId = 0
 		info.SubscriptionPreConsumed = 0
+		info.SubscriptionLimitRefs = nil
 	}
 }
 

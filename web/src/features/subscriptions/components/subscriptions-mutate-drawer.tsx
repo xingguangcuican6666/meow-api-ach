@@ -17,9 +17,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { CalendarClock, CreditCard, RefreshCw, Settings2 } from 'lucide-react'
+import {
+  CalendarClock,
+  CreditCard,
+  Gauge,
+  Plus,
+  RefreshCw,
+  Settings2,
+  Trash2,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useForm, type Resolver } from 'react-hook-form'
+import { useFieldArray, useForm, type Resolver } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -31,6 +39,7 @@ import {
   sideDrawerHeaderClassName,
   sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
+import { MultiSelect } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
 import {
@@ -62,6 +71,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { getModels } from '@/features/models/api'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { handleServerError } from '@/lib/handle-server-error'
 
@@ -72,7 +82,11 @@ import {
   createWaffoPancakeSubscriptionProduct,
   listWaffoPancakeSubscriptionProductOptions,
 } from '../api'
-import { getDurationUnitOptions, getResetPeriodOptions } from '../constants'
+import {
+  getDurationUnitOptions,
+  getQuotaLimitWindowOptions,
+  getResetPeriodOptions,
+} from '../constants'
 import {
   getPlanFormSchema,
   PLAN_FORM_DEFAULTS,
@@ -102,6 +116,7 @@ export function SubscriptionsMutateDrawer({
   const currencyLabel = getCurrencyLabel()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [groupOptions, setGroupOptions] = useState<string[]>([])
+  const [modelOptions, setModelOptions] = useState<string[]>([])
   const [creatingPancakeProduct, setCreatingPancakeProduct] = useState(false)
   const [pancakeProducts, setPancakeProducts] = useState<
     { id: string; name: string; status: string }[]
@@ -111,6 +126,12 @@ export function SubscriptionsMutateDrawer({
   const form = useForm<PlanFormValues>({
     resolver: zodResolver(schema) as unknown as Resolver<PlanFormValues>,
     defaultValues: PLAN_FORM_DEFAULTS,
+  })
+  // Extra caps are a repeatable row set, so they need their own field array:
+  // 5h, 7d and per-model limits all live in one plan at the same time.
+  const quotaLimits = useFieldArray({
+    control: form.control,
+    name: 'quota_limits',
   })
 
   useEffect(() => {
@@ -129,6 +150,21 @@ export function SubscriptionsMutateDrawer({
           }
         })
         .catch(() => {})
+      // Model list only feeds the per-model limit picker; an empty list still
+      // lets the operator type a pattern through MultiSelect's create entry.
+      // This form is admin-only, so it lists every configured model rather than
+      // only the ones the operator's own account can call.
+      getModels({ p: 1, page_size: 500 })
+        .then((res) =>
+          setModelOptions(
+            res.success
+              ? (res.data?.items || [])
+                  .map((item) => item.model_name)
+                  .filter(Boolean)
+              : []
+          )
+        )
+        .catch(() => setModelOptions([]))
       // Best-effort — empty list still lets the operator use "+ Create".
       listWaffoPancakeSubscriptionProductOptions()
         .then((res) => {
@@ -258,6 +294,7 @@ export function SubscriptionsMutateDrawer({
 
   const durationUnitOpts = getDurationUnitOptions(t)
   const resetPeriodOpts = getResetPeriodOptions(t)
+  const limitWindowOpts = getQuotaLimitWindowOptions(t)
 
   return (
     <Sheet
@@ -730,6 +767,227 @@ export function SubscriptionsMutateDrawer({
                   )}
                 />
               </div>
+            </SideDrawerSection>
+
+            {/* Extra Quota Limits: 5h / 7d / per-model caps that all apply at
+                once on top of the plan's whole-period quota. */}
+            <SideDrawerSection>
+              <div className='flex items-start justify-between gap-2'>
+                <h3 className='flex items-center gap-2 text-sm font-medium'>
+                  <IconBadge tone='info' size='xs'>
+                    <Gauge />
+                  </IconBadge>
+                  {t('Extra Quota Limits')}
+                </h3>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  className='shrink-0'
+                  onClick={() =>
+                    quotaLimits.append({
+                      key: '',
+                      name: '',
+                      window_seconds: 0,
+                      amount_total: 0,
+                      models: [],
+                    })
+                  }
+                >
+                  <Plus size={16} />
+                  {t('Add limit')}
+                </Button>
+              </div>
+
+              <FormDescription>
+                {t(
+                  'Each limit caps usage over its own window. Add a 5 hour limit, a 7 day limit and per-model limits to the same plan; every limit applies at once.'
+                )}
+              </FormDescription>
+
+              {quotaLimits.fields.length === 0 ? (
+                <p className='text-muted-foreground text-xs'>
+                  {t('No extra limit configured.')}
+                </p>
+              ) : (
+                <div className='flex flex-col gap-3'>
+                  {quotaLimits.fields.map((row, index) => (
+                    <div
+                      key={row.id}
+                      className='bg-muted/30 rounded-md border p-3'
+                    >
+                      <div className='mb-2 flex items-center justify-between gap-2'>
+                        <span className='text-xs font-medium'>
+                          {t('Quota Limit')} #{index + 1}
+                        </span>
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='sm'
+                          aria-label={t('Remove limit')}
+                          onClick={() => quotaLimits.remove(index)}
+                        >
+                          <Trash2 size={16} />
+                        </Button>
+                      </div>
+
+                      <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+                        <FormField
+                          control={form.control}
+                          name={`quota_limits.${index}.name`}
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Limit name')}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  {...field}
+                                  value={field.value ?? ''}
+                                  placeholder={t('e.g. 5h limit')}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name={`quota_limits.${index}.window_seconds`}
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Window')}</FormLabel>
+                              <Select
+                                items={limitWindowOpts.map((o) => ({
+                                  value: o.value,
+                                  label: o.label,
+                                }))}
+                                value={String(field.value ?? 0)}
+                                onValueChange={(v) =>
+                                  field.onChange(
+                                    v ? Number.parseInt(v, 10) || 0 : 0
+                                  )
+                                }
+                              >
+                                <FormControl>
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent alignItemWithTrigger={false}>
+                                  <SelectGroup>
+                                    {limitWindowOpts.map((o) => (
+                                      <SelectItem key={o.value} value={o.value}>
+                                        {o.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                              <FormDescription>
+                                {t(
+                                  'Rolling window; the counter restarts once the window elapsed. Whole subscription period follows the reset cycle above.'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name={`quota_limits.${index}.amount_total`}
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                {t('Limit quota ({{currency}})', {
+                                  currency: currencyLabel,
+                                })}
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  {...field}
+                                  type='number'
+                                  min={0}
+                                  step={tokensOnly ? 1 : 0.01}
+                                  placeholder={
+                                    tokensOnly
+                                      ? t('Enter quota in tokens')
+                                      : t('Enter quota in {{currency}}', {
+                                          currency: currencyLabel,
+                                        })
+                                  }
+                                  onChange={(e) =>
+                                    field.onChange(
+                                      Number.parseFloat(e.target.value) || 0
+                                    )
+                                  }
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name={`quota_limits.${index}.models`}
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                {t('Models (empty for all models)')}
+                              </FormLabel>
+                              <FormControl>
+                                <MultiSelect
+                                  options={modelOptions.map((m) => ({
+                                    label: m,
+                                    value: m,
+                                  }))}
+                                  selected={field.value || []}
+                                  onChange={field.onChange}
+                                  allowCreate
+                                  createLabel='Use "{{value}}"'
+                                  placeholder={t(
+                                    'Select models (empty for allow all)'
+                                  )}
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Leave empty for one shared counter; select models to keep an independent quota per model. A trailing * matches a model prefix.'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+
+                      <FormField
+                        control={form.control}
+                        name={`quota_limits.${index}.key`}
+                        render={({ field }) => (
+                          <FormItem className='mt-3'>
+                            <FormLabel>{t('Limit key')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                {...field}
+                                value={field.value ?? ''}
+                                placeholder={t('Auto-assigned when empty')}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Stable identity for the counters of this limit. Keep it when editing so existing usage is not discarded.'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
             </SideDrawerSection>
 
             {/* Payment Config */}

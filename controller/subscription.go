@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -25,6 +26,27 @@ type BillingPreferenceRequest struct {
 
 type SubscriptionBalancePayRequest struct {
 	PlanId int `json:"plan_id"`
+}
+
+// quotaLimitsErrorMessage turns a limit validation error into the operator-facing
+// reason for rejecting a plan create/update.
+func quotaLimitsErrorMessage(err error) string {
+	switch {
+	case errors.Is(err, model.ErrSubscriptionQuotaLimitsTooMany):
+		return "额度上限条目过多"
+	case errors.Is(err, model.ErrSubscriptionQuotaLimitKeyTooBig):
+		return "额度上限标识过长"
+	case errors.Is(err, model.ErrSubscriptionQuotaLimitDuplicateKey):
+		return "额度上限标识重复"
+	case errors.Is(err, model.ErrSubscriptionQuotaLimitAmount):
+		return "额度上限额度需大于0"
+	case errors.Is(err, model.ErrSubscriptionQuotaLimitWindow):
+		return "额度上限时间窗口不能为负数"
+	case errors.Is(err, model.ErrSubscriptionQuotaLimitModels):
+		return "额度上限模型配置无效"
+	default:
+		return err.Error()
+	}
 }
 
 // ---- User APIs ----
@@ -204,7 +226,13 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
-	err := model.DB.Create(&req.Plan).Error
+	quotaLimits, err := model.ValidateSubscriptionQuotaLimits(req.Plan.QuotaLimits)
+	if err != nil {
+		common.ApiErrorMsg(c, quotaLimitsErrorMessage(err))
+		return
+	}
+	req.Plan.QuotaLimits = quotaLimits
+	err = model.DB.Create(&req.Plan).Error
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -278,8 +306,14 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
+	quotaLimits, err := model.ValidateSubscriptionQuotaLimits(req.Plan.QuotaLimits)
+	if err != nil {
+		common.ApiErrorMsg(c, quotaLimitsErrorMessage(err))
+		return
+	}
+	req.Plan.QuotaLimits = quotaLimits
 
-	err := model.DB.Transaction(func(tx *gorm.DB) error {
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		// update plan (allow zero values updates with map)
 		updateMap := map[string]any{
 			"title":                      req.Plan.Title,
@@ -300,6 +334,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"downgrade_group":            req.Plan.DowngradeGroup,
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
+			"quota_limits":               req.Plan.QuotaLimits,
 			"updated_at":                 common.GetTimestamp(),
 		}
 		if req.Plan.AllowBalancePay != nil {

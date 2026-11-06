@@ -51,7 +51,11 @@ import {
   updateBillingPreference,
 } from '@/features/subscriptions/api'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
-import { formatDuration, formatResetPeriod } from '@/features/subscriptions/lib'
+import {
+  formatDuration,
+  formatQuotaLimitLabel,
+  formatResetPeriod,
+} from '@/features/subscriptions/lib'
 import type {
   PlanRecord,
   UserSubscriptionRecord,
@@ -508,6 +512,55 @@ export function SubscriptionPlansCard({
                       {totalAmount > 0 && isActive && (
                         <Progress value={usagePercent} className='mt-2 h-1.5' />
                       )}
+                      {isActive && (sub.quota_limits?.length ?? 0) > 0 && (
+                        <div className='mt-2 space-y-1.5'>
+                          {sub.quota_limits?.map((limit) => {
+                            const limitTotal = Number(limit.amount_total || 0)
+                            const limitUsed = Number(limit.amount_used || 0)
+                            const limitPercent =
+                              limitTotal > 0
+                                ? Math.min(
+                                    100,
+                                    Math.round((limitUsed / limitTotal) * 100)
+                                  )
+                                : 0
+                            return (
+                              <div key={`${limit.key}:${limit.model || 'all'}`}>
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <div className='text-muted-foreground flex items-center justify-between gap-2 text-[11px]' />
+                                    }
+                                  >
+                                    <span className='truncate'>
+                                      {formatQuotaLimitLabel(limit, t)}
+                                    </span>
+                                    <span className='shrink-0'>
+                                      {limitTotal > 0
+                                        ? `${formatQuota(limitUsed)}/${formatQuota(limitTotal)}`
+                                        : t('Unlimited')}
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {formatQuotaLimitLabel(limit, t)}:{' '}
+                                    {t('Raw Quota')}: {limitUsed}/{limitTotal} ·{' '}
+                                    {t('Remaining')} {limit.amount_remain}
+                                    {limit.next_reset_time
+                                      ? ` · ${t('Next reset')} ${new Date(limit.next_reset_time * 1000).toLocaleString()}`
+                                      : ''}
+                                  </TooltipContent>
+                                </Tooltip>
+                                {limitTotal > 0 && (
+                                  <Progress
+                                    value={limitPercent}
+                                    className='mt-0.5 h-1'
+                                  />
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
                     </div>
                   )
                 })}
@@ -543,6 +596,16 @@ export function SubscriptionPlansCard({
                 totalAmount > 0
                   ? `${t('Total Quota')}: ${formatQuota(totalAmount)}`
                   : `${t('Total Quota')}: ${t('Unlimited')}`,
+                // Surface every extra cap (5h / 7d / per-model) so the buyer
+                // sees the limits that apply on top of the whole-period quota.
+                ...(plan.quota_limits || []).map(
+                  (limit) =>
+                    `${formatQuotaLimitLabel(limit, t)}: ${
+                      Number(limit.amount_total) > 0
+                        ? formatQuota(Number(limit.amount_total))
+                        : t('Unlimited')
+                    }`
+                ),
                 limit > 0 ? `${t('Purchase Limit')}: ${limit}` : null,
                 plan.upgrade_group
                   ? `${t('Upgrade Group')}: ${plan.upgrade_group}`

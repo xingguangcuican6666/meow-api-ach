@@ -22,6 +22,35 @@ import { z } from 'zod'
 // Subscription Plan Schema & Types
 // ============================================================================
 
+export const subscriptionQuotaLimitSchema = z.object({
+  key: z.string().optional(),
+  name: z.string().optional(),
+  window_seconds: z.number(),
+  amount_total: z.number(),
+  models: z.array(z.string()).optional(),
+})
+
+export type SubscriptionQuotaLimit = z.infer<
+  typeof subscriptionQuotaLimitSchema
+>
+
+export const subscriptionLimitUsageSchema = z.object({
+  key: z.string(),
+  name: z.string().optional(),
+  window_seconds: z.number(),
+  amount_total: z.number(),
+  models: z.array(z.string()).optional(),
+  model: z.string().optional(),
+  amount_used: z.number(),
+  amount_remain: z.number(),
+  window_from: z.number().optional(),
+  next_reset_time: z.number().optional(),
+})
+
+export type SubscriptionLimitUsage = z.infer<
+  typeof subscriptionLimitUsageSchema
+>
+
 export const subscriptionPlanSchema = z.object({
   id: z.number(),
   title: z.string(),
@@ -39,6 +68,7 @@ export const subscriptionPlanSchema = z.object({
   allow_wallet_overflow: z.boolean().optional().default(true),
   max_purchase_per_user: z.number(),
   total_amount: z.number(),
+  quota_limits: z.array(subscriptionQuotaLimitSchema).optional(),
   upgrade_group: z.string().optional(),
   downgrade_group: z.string().optional(),
   stripe_price_id: z.string().optional(),
@@ -73,6 +103,8 @@ export type UserSubscription = z.infer<typeof userSubscriptionSchema>
 
 export interface UserSubscriptionRecord {
   subscription: UserSubscription
+  /** Caps configured on the plan with this subscription's counters. */
+  quota_limits?: SubscriptionLimitUsage[]
 }
 
 // ============================================================================
