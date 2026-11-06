@@ -26,7 +26,11 @@ import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { formatQuota } from '@/lib/format'
 
-import { formatDuration, formatResetPeriod } from '../lib'
+import {
+  formatDuration,
+  formatQuotaLimitLabel,
+  formatResetPeriod,
+} from '../lib'
 import type { PlanRecord } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 
@@ -166,10 +170,27 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
         meta: { mobileHidden: true },
         cell: ({ row }) => {
           const total = Number(row.original.plan.total_amount || 0)
+          const limits = row.original.plan.quota_limits || []
           return (
-            <span className='text-muted-foreground'>
-              {total > 0 ? formatQuota(total) : t('Unlimited')}
-            </span>
+            <div className='flex flex-col gap-0.5'>
+              <span className='text-muted-foreground'>
+                {total > 0 ? formatQuota(total) : t('Unlimited')}
+              </span>
+              {limits.length > 0 && (
+                <span className='text-muted-foreground/80 text-xs'>
+                  {limits
+                    .map(
+                      (limit) =>
+                        `${formatQuotaLimitLabel(limit, t)}: ${
+                          Number(limit.amount_total) > 0
+                            ? formatQuota(Number(limit.amount_total))
+                            : t('Unlimited')
+                        }`
+                    )
+                    .join(' · ')}
+                </span>
+              )}
+            </div>
           )
         },
         size: 150,

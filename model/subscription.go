@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/cachex"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/hot"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -185,6 +186,10 @@ type SubscriptionPlan struct {
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
 	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds" gorm:"type:bigint;default:0"`
 
+	// Additional concurrent caps applied on top of TotalAmount: a 5 hour
+	// window, a 7 day window, a per-model quota, or any combination of them.
+	QuotaLimits SubscriptionQuotaLimits `json:"quota_limits" gorm:"type:text"`
+
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
 }
@@ -267,6 +272,11 @@ type UserSubscription struct {
 	LastResetTime int64 `json:"last_reset_time" gorm:"type:bigint;default:0"`
 	NextResetTime int64 `json:"next_reset_time" gorm:"type:bigint;default:0;index"`
 
+	// QuotaLimitStates holds the per-limit counters snapshot from the plan:
+	// one entry per (limit key, model name). Windowed counters roll on their
+	// own anchor, window-less counters follow the plan's quota reset.
+	QuotaLimitStates SubscriptionQuotaLimitStates `json:"quota_limit_states,omitempty" gorm:"type:text"`
+
 	UpgradeGroup  string `json:"upgrade_group" gorm:"type:varchar(64);default:''"`
 	PrevUserGroup string `json:"prev_user_group" gorm:"type:varchar(64);default:''"`
 
@@ -294,6 +304,10 @@ func (s *UserSubscription) BeforeUpdate(tx *gorm.DB) error {
 
 type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
+	// QuotaLimits reports every cap configured on the plan together with this
+	// subscription's counters, so the UIs show 5h / 7d / per-model usage
+	// without loading the plan themselves.
+	QuotaLimits []SubscriptionLimitUsage `json:"quota_limits,omitempty"`
 }
 
 type SubscriptionResetResult struct {
@@ -913,11 +927,18 @@ func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
 	if len(subs) == 0 {
 		return []SubscriptionSummary{}
 	}
+	now := GetDBTimestamp()
 	result := make([]SubscriptionSummary, 0, len(subs))
 	for _, sub := range subs {
 		subCopy := sub
+		plan, err := getSubscriptionPlanByIdTx(nil, sub.PlanId)
+		var limits []SubscriptionLimitUsage
+		if err == nil {
+			limits = buildSubscriptionLimitUsage(plan, &subCopy, now)
+		}
 		result = append(result, SubscriptionSummary{
 			Subscription: &subCopy,
+			QuotaLimits:  limits,
 		})
 	}
 	return result
@@ -1014,6 +1035,7 @@ func resetUserSubscriptionTx(tx *gorm.DB, sub *UserSubscription, plan *Subscript
 		return errors.New("invalid reset args")
 	}
 	sub.AmountUsed = 0
+	resetSubscriptionLimitStates(sub, plan)
 	if advanceResetTime {
 		nextReset := calcNextResetTime(time.Unix(now, 0), plan, sub.EndTime)
 		sub.NextResetTime = nextReset
@@ -1024,6 +1046,31 @@ func resetUserSubscriptionTx(tx *gorm.DB, sub *UserSubscription, plan *Subscript
 		}
 	}
 	return tx.Save(sub).Error
+}
+
+// resetSubscriptionLimitStates zeroes every limit counter that follows the
+// plan's reset cycle. Windowed counters are untouched: they roll on their own
+// anchor, so an admin quota reset must not shorten a running 5h/7d window.
+func resetSubscriptionLimitStates(sub *UserSubscription, plan *SubscriptionPlan) {
+	if sub == nil || len(sub.QuotaLimitStates) == 0 {
+		return
+	}
+	limits := plan.GetQuotaLimits()
+	kept := make([]SubscriptionQuotaLimitState, 0, len(sub.QuotaLimitStates))
+	for _, state := range sub.QuotaLimitStates {
+		limit, ok := findSubscriptionLimit(limits, state.Key)
+		if !ok {
+			continue
+		}
+		if limit.WindowSeconds > 0 {
+			kept = append(kept, state)
+			continue
+		}
+		state.Used = 0
+		state.WindowFrom = 0
+		kept = append(kept, state)
+	}
+	sub.QuotaLimitStates = kept
 }
 
 func buildSubscriptionResetResult(plan *SubscriptionPlan, subs []UserSubscription, advanceResetTime bool) *SubscriptionResetResult {
@@ -1134,6 +1181,9 @@ type SubscriptionPreConsumeResult struct {
 	AmountTotal        int64
 	AmountUsedBefore   int64
 	AmountUsedAfter    int64
+	// LimitRefs lists the quota-limit counters this reservation charged, so
+	// settle and refund adjust exactly the same counters.
+	LimitRefs []types.SubscriptionLimitRef
 }
 
 // ExpireDueSubscriptions marks expired subscriptions and handles group downgrade.
@@ -1242,8 +1292,11 @@ type SubscriptionPreConsumeRecord struct {
 	UserSubscriptionId int    `json:"user_subscription_id" gorm:"index"`
 	PreConsumed        int64  `json:"pre_consumed" gorm:"type:bigint;not null;default:0"`
 	Status             string `json:"status" gorm:"type:varchar(32);index"` // consumed/refunded
-	CreatedAt          int64  `json:"created_at" gorm:"bigint"`
-	UpdatedAt          int64  `json:"updated_at" gorm:"bigint;index"`
+	// LimitRefs records which quota-limit counters this request charged so a
+	// refund releases the same counters after a restart.
+	LimitRefs SubscriptionLimitRefs `json:"limit_refs" gorm:"type:text"`
+	CreatedAt int64                 `json:"created_at" gorm:"bigint"`
+	UpdatedAt int64                 `json:"updated_at" gorm:"bigint;index"`
 }
 
 func (r *SubscriptionPreConsumeRecord) BeforeCreate(tx *gorm.DB) error {
@@ -1284,11 +1337,13 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 		if sub.NextResetTime == 0 && next > 0 {
 			sub.NextResetTime = next
 			sub.LastResetTime = base.Unix()
+			resetSubscriptionLimitStates(sub, plan)
 			return tx.Save(sub).Error
 		}
 		return nil
 	}
 	sub.AmountUsed = 0
+	resetSubscriptionLimitStates(sub, plan)
 	sub.LastResetTime = base.Unix()
 	sub.NextResetTime = next
 	return tx.Save(sub).Error
@@ -1328,6 +1383,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			returnValue.AmountTotal = sub.AmountTotal
 			returnValue.AmountUsedBefore = sub.AmountUsed
 			returnValue.AmountUsedAfter = sub.AmountUsed
+			returnValue.LimitRefs = existing.LimitRefs
 			return nil
 		}
 
@@ -1341,6 +1397,9 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		if len(subs) == 0 {
 			return errors.New("no active subscription")
 		}
+		// The reason the last rejected subscription ran out keeps the error
+		// message informative instead of a bare "insufficient".
+		var blockedErr error
 		for _, candidate := range subs {
 			sub := candidate
 			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
@@ -1357,12 +1416,18 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 					continue
 				}
 			}
+			if limit, state, blocked := checkSubscriptionLimits(&sub, plan, modelName, amount, now); blocked {
+				blockedErr = subscriptionLimitBlockedError(limit, state, amount)
+				continue
+			}
+			limitRefs := subscriptionLimitRefs(plan.GetQuotaLimits(), modelName)
 			record := &SubscriptionPreConsumeRecord{
 				RequestId:          requestId,
 				UserId:             userId,
 				UserSubscriptionId: sub.Id,
 				PreConsumed:        amount,
 				Status:             "consumed",
+				LimitRefs:          limitRefs,
 			}
 			if err := tx.Create(record).Error; err != nil {
 				var dup SubscriptionPreConsumeRecord
@@ -1375,11 +1440,13 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 					returnValue.AmountTotal = sub.AmountTotal
 					returnValue.AmountUsedBefore = sub.AmountUsed
 					returnValue.AmountUsedAfter = sub.AmountUsed
+					returnValue.LimitRefs = dup.LimitRefs
 					return nil
 				}
 				return err
 			}
 			sub.AmountUsed += amount
+			adjustSubscriptionLimitCounters(&sub, plan, limitRefs, amount, now)
 			if err := tx.Save(&sub).Error; err != nil {
 				return err
 			}
@@ -1388,7 +1455,11 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			returnValue.AmountTotal = sub.AmountTotal
 			returnValue.AmountUsedBefore = usedBefore
 			returnValue.AmountUsedAfter = sub.AmountUsed
+			returnValue.LimitRefs = limitRefs
 			return nil
+		}
+		if blockedErr != nil {
+			return blockedErr
 		}
 		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
 	})
@@ -1403,6 +1474,9 @@ func RefundSubscriptionPreConsume(requestId string) error {
 	if strings.TrimSpace(requestId) == "" {
 		return errors.New("requestId is empty")
 	}
+	// Read the clock before opening the transaction, as postConsumeUserSubscriptionDeltaTx
+	// runs while this transaction holds row locks.
+	now := GetDBTimestamp()
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var record SubscriptionPreConsumeRecord
 		if err := lockForUpdate(tx).
@@ -1416,7 +1490,7 @@ func RefundSubscriptionPreConsume(requestId string) error {
 			record.Status = "refunded"
 			return tx.Save(&record).Error
 		}
-		if err := PostConsumeUserSubscriptionDelta(record.UserSubscriptionId, -record.PreConsumed); err != nil {
+		if err := postConsumeUserSubscriptionDeltaTx(tx, record.UserSubscriptionId, -record.PreConsumed, record.LimitRefs, now); err != nil {
 			return err
 		}
 		record.Status = "refunded"
@@ -1507,25 +1581,59 @@ func GetSubscriptionPlanInfoByUserSubscriptionId(userSubscriptionId int) (*Subsc
 }
 
 // Update subscription used amount by delta (positive consume more, negative refund).
+// PostConsumeUserSubscriptionDelta adjusts the amount_used of one subscription
+// by delta (positive consume, negative refund) without touching limit counters.
 func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error {
+	return PostConsumeUserSubscriptionDeltaWithLimits(userSubscriptionId, delta, nil)
+}
+
+// PostConsumeUserSubscriptionDeltaWithLimits adjusts amount_used and every
+// quota-limit counter named by limitRefs by the same delta. Settle and refund
+// pass the refs the request reserved on them; nil keeps the legacy behavior of
+// adjusting amount_used only.
+//
+// Limit admission is enforced once, in PreConsumeUserSubscription, before the
+// request reaches an upstream. This function only reconciles: a request that
+// was admitted under a cap settles its real cost even when that cost runs past
+// the cap, so the accounting stays honest and the next request is blocked by
+// the exhausted counter. The overshoot is therefore bounded by one request.
+func PostConsumeUserSubscriptionDeltaWithLimits(userSubscriptionId int, delta int64, limitRefs []types.SubscriptionLimitRef) error {
 	if userSubscriptionId <= 0 {
 		return errors.New("invalid userSubscriptionId")
 	}
 	if delta == 0 {
 		return nil
 	}
+	// Read the clock outside the transaction: GetDBTimestamp issues its own
+	// query on the shared connection pool, which deadlocks against the row lock
+	// this transaction is about to hold on single-connection setups.
+	now := GetDBTimestamp()
 	return DB.Transaction(func(tx *gorm.DB) error {
-		var sub UserSubscription
-		if err := lockForUpdate(tx).
-			Where("id = ?", userSubscriptionId).
-			First(&sub).Error; err != nil {
+		return postConsumeUserSubscriptionDeltaTx(tx, userSubscriptionId, delta, limitRefs, now)
+	})
+}
+
+func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, delta int64, limitRefs []types.SubscriptionLimitRef, now int64) error {
+	if tx == nil || userSubscriptionId <= 0 || delta == 0 {
+		return nil
+	}
+	var sub UserSubscription
+	if err := lockForUpdate(tx).
+		Where("id = ?", userSubscriptionId).
+		First(&sub).Error; err != nil {
+		return err
+	}
+	newUsed := max(sub.AmountUsed+delta, 0)
+	if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
+		return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
+	}
+	sub.AmountUsed = newUsed
+	if len(limitRefs) > 0 {
+		plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
+		if err != nil {
 			return err
 		}
-		newUsed := max(sub.AmountUsed+delta, 0)
-		if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
-			return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
-		}
-		sub.AmountUsed = newUsed
-		return tx.Save(&sub).Error
-	})
+		adjustSubscriptionLimitCounters(&sub, plan, limitRefs, delta, now)
+	}
+	return tx.Save(&sub).Error
 }

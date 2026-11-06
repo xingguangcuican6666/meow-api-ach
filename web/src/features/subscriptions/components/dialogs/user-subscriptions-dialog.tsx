@@ -59,7 +59,7 @@ import {
   deleteUserSubscription,
   resetUserSubscriptionsByPlan,
 } from '../../api'
-import { formatTimestamp } from '../../lib'
+import { formatQuotaLimitLabel, formatTimestamp } from '../../lib'
 import type { PlanRecord, UserSubscriptionRecord } from '../../types'
 
 interface Props {
@@ -338,9 +338,28 @@ export function UserSubscriptionsDialog(props: Props) {
                     const sub = record.subscription
                     const total = Number(sub.amount_total || 0)
                     const used = Number(sub.amount_used || 0)
-                    return total > 0
-                      ? `${formatQuota(used)}/${formatQuota(total)}`
-                      : t('Unlimited')
+                    const limits = record.quota_limits || []
+                    return (
+                      <div className='text-sm'>
+                        <div>
+                          {total > 0
+                            ? `${formatQuota(used)}/${formatQuota(total)}`
+                            : t('Unlimited')}
+                        </div>
+                        {limits.length > 0 && (
+                          <div className='text-muted-foreground mt-0.5 flex flex-col gap-0.5 text-xs'>
+                            {limits.map((limit) => (
+                              <div key={`${limit.key}:${limit.model || 'all'}`}>
+                                {formatQuotaLimitLabel(limit, t)}:{' '}
+                                {Number(limit.amount_total) > 0
+                                  ? `${formatQuota(Number(limit.amount_used))}/${formatQuota(Number(limit.amount_total))}`
+                                  : t('Unlimited')}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
                   },
                 },
                 {

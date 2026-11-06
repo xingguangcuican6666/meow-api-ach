@@ -20,7 +20,7 @@ import type { TFunction } from 'i18next'
 
 import dayjs from '@/lib/dayjs'
 
-import type { SubscriptionPlan } from '../types'
+import type { SubscriptionLimitUsage, SubscriptionPlan } from '../types'
 
 export function formatDuration(
   plan: Partial<SubscriptionPlan>,
@@ -65,4 +65,39 @@ export function formatResetPeriod(
 export function formatTimestamp(ts: number): string {
   if (!ts) return '-'
   return dayjs(ts * 1000).format('YYYY-MM-DD HH:mm:ss')
+}
+
+export function formatQuotaLimitWindow(seconds: number, t: TFunction): string {
+  if (!seconds || seconds <= 0) return t('Whole subscription period')
+  if (seconds % (24 * 60 * 60) === 0) {
+    const days = seconds / (24 * 60 * 60)
+    return days === 1 ? t('1 day') : `${days} ${t('days')}`
+  }
+  if (seconds % (60 * 60) === 0) {
+    const hours = seconds / (60 * 60)
+    return hours === 1 ? t('1 hour') : `${hours} ${t('hours')}`
+  }
+  if (seconds % 60 === 0) return `${seconds / 60} ${t('minutes')}`
+  return `${seconds} ${t('seconds')}`
+}
+
+/**
+ * Human label of one configured limit, e.g. "5h · claude-*" or "7d".
+ * Model-scoped limits keep an independent counter per model, so the label
+ * names the window plus the model scope.
+ */
+export function formatQuotaLimitLabel(
+  limit: Partial<SubscriptionLimitUsage>,
+  t: TFunction
+): string {
+  const parts: string[] = []
+  const name = (limit.name || '').trim()
+  if (name) parts.push(name)
+  parts.push(formatQuotaLimitWindow(Number(limit.window_seconds || 0), t))
+  if (limit.model) {
+    parts.push(limit.model)
+  } else if (limit.models && limit.models.length > 0) {
+    parts.push(limit.models.join(', '))
+  }
+  return parts.join(' · ')
 }

@@ -23,6 +23,17 @@ import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 
 import type { SubscriptionPlan, PlanPayload } from '../types'
 
+const quotaLimitFormSchema = z.object({
+  // Stable identity of the counter set; assigned by the backend when empty.
+  key: z.string().optional(),
+  name: z.string().optional(),
+  window_seconds: z.coerce.number().min(0),
+  amount_total: z.coerce.number().min(0),
+  models: z.array(z.string()).optional(),
+})
+
+export type QuotaLimitFormValue = z.infer<typeof quotaLimitFormSchema>
+
 export function getPlanFormSchema(t: TFunction) {
   return z.object({
     title: z.string().min(1, t('Please enter plan title')),
@@ -45,6 +56,7 @@ export function getPlanFormSchema(t: TFunction) {
     allow_wallet_overflow: z.boolean(),
     max_purchase_per_user: z.coerce.number().min(0),
     total_amount: z.coerce.number().min(0),
+    quota_limits: z.array(quotaLimitFormSchema),
     upgrade_group: z.string().optional(),
     downgrade_group: z.string().optional(),
     stripe_price_id: z.string().optional(),
@@ -70,6 +82,7 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   allow_wallet_overflow: true,
   max_purchase_per_user: 0,
   total_amount: 0,
+  quota_limits: [],
   upgrade_group: '',
   downgrade_group: '',
   stripe_price_id: '',
@@ -93,6 +106,13 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     allow_wallet_overflow: plan.allow_wallet_overflow !== false,
     max_purchase_per_user: Number(plan.max_purchase_per_user || 0),
     total_amount: quotaUnitsToDollars(Number(plan.total_amount || 0)),
+    quota_limits: (plan.quota_limits || []).map((limit) => ({
+      key: limit.key || '',
+      name: limit.name || '',
+      window_seconds: Number(limit.window_seconds || 0),
+      amount_total: quotaUnitsToDollars(Number(limit.amount_total || 0)),
+      models: limit.models || [],
+    })),
     upgrade_group: plan.upgrade_group || '',
     downgrade_group: plan.downgrade_group || '',
     stripe_price_id: plan.stripe_price_id || '',
@@ -117,6 +137,15 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
       sort_order: Number(values.sort_order || 0),
       max_purchase_per_user: Number(values.max_purchase_per_user || 0),
       total_amount: parseQuotaFromDollars(Number(values.total_amount || 0)),
+      quota_limits: (values.quota_limits || []).map((limit, index) => ({
+        key: (limit.key || '').trim() || `limit-${index + 1}`,
+        name: (limit.name || '').trim(),
+        window_seconds: Number(limit.window_seconds || 0),
+        amount_total: parseQuotaFromDollars(Number(limit.amount_total || 0)),
+        models: (limit.models || [])
+          .map((model) => model.trim())
+          .filter(Boolean),
+      })),
       upgrade_group: values.upgrade_group || '',
       downgrade_group: values.downgrade_group || '',
     },
