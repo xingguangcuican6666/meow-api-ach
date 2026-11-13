@@ -255,6 +255,9 @@ func init() {
 	for _, spec := range builtinTextConverters {
 		registerBuiltinTextConverter(spec)
 	}
+	for _, spec := range builtinRequestConverterVariants {
+		registerBuiltinRequestConverter(spec)
+	}
 }
 
 func LookupTextConverter(converter string) (TextConverterSpec, bool) {

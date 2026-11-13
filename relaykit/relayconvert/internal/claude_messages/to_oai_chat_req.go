@@ -25,6 +25,21 @@ type openRouterRequestReasoning struct {
 }
 
 func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
+	return claudeMessagesToOpenAIChat(ctx, claudeRequest, info, false)
+}
+
+// ClaudeMessagesRequestToOpenAIChatPure converts an Anthropic Messages request
+// into the smallest body the OpenAI Chat Completions schema defines, for
+// upstreams that reject anything beyond it. Compared with the standard
+// conversion it drops the Anthropic-only sampling knob (top_k), the prompt
+// caching hints (cache_control), the OpenRouter reasoning dialect, and the
+// cascaded -thinking model suffix, and it writes text-only content as plain
+// strings instead of block arrays.
+func ClaudeMessagesRequestToOpenAIChatPure(ctx context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
+	return claudeMessagesToOpenAIChat(ctx, claudeRequest, info, true)
+}
+
+func claudeMessagesToOpenAIChat(ctx context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta, pure bool) (*dto.GeneralOpenAIRequest, error) {
 	openAIRequest := dto.GeneralOpenAIRequest{
 		Model:       claudeRequest.Model,
 		Temperature: claudeRequest.Temperature,
@@ -35,7 +50,9 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 	if claudeRequest.TopP != nil {
 		openAIRequest.TopP = kitutil.GetPointer(*claudeRequest.TopP)
 	}
-	if claudeRequest.TopK != nil {
+	// top_k is not an OpenAI Chat Completions field; only upstreams that speak
+	// an extended dialect accept it.
+	if claudeRequest.TopK != nil && !pure {
 		openAIRequest.TopK = kitutil.GetPointer(*claudeRequest.TopK)
 	}
 	if claudeRequest.Stream != nil {
@@ -46,7 +63,7 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 		return nil, reasoning.AsClientError(err)
 	}
 
-	isOpenRouter := convmeta.OptionsOf(info).OpenRouterDialect
+	isOpenRouter := !pure && convmeta.OptionsOf(info).OpenRouterDialect
 	if isOpenRouter {
 		if effort := claudeRequest.GetEfforts(); effort != "" {
 			effortBytes, _ := kitutil.Marshal(effort)
@@ -78,7 +95,7 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 		if err := reasoning.ApplyToOpenAIChat(&openAIRequest, reasoningIntent); err != nil {
 			return nil, reasoning.AsClientError(err)
 		}
-		if info != nil {
+		if info != nil && !pure {
 			// Keep the outgoing -thinking suffix so a cascaded downstream
 			// new-api can recover reasoning intent from the model name. This
 			// is an emission-side policy, not converter-side suffix parsing.
@@ -181,9 +198,11 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 				switch mediaMsg.Type {
 				case "text", "input_text":
 					message := dto.MediaContent{
-						Type:         "text",
-						Text:         mediaMsg.GetText(),
-						CacheControl: mediaMsg.CacheControl,
+						Type: "text",
+						Text: mediaMsg.GetText(),
+					}
+					if !pure {
+						message.CacheControl = mediaMsg.CacheControl
 					}
 					mediaMessages = append(mediaMessages, message)
 				case "image":
@@ -233,6 +252,9 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 			if len(mediaMessages) > 0 && len(toolCalls) == 0 {
 				openAIMessage.SetMediaContent(mediaMessages)
 			}
+			if pure {
+				writePlainTextContent(&openAIMessage)
+			}
 		}
 		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 {
 			openAIMessages = append(openAIMessages, openAIMessage)
@@ -244,6 +266,24 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 
 	openAIRequest.Messages = openAIMessages
 	return &openAIRequest, nil
+}
+
+// writePlainTextContent rewrites text-only content blocks as the plain string
+// OpenAI defines for that case. Chat Completions accepts both shapes, but the
+// string form is what every OpenAI-compatible upstream handles.
+func writePlainTextContent(message *dto.Message) {
+	parts := message.ParseContent()
+	if len(parts) == 0 {
+		return
+	}
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part.Type != "text" {
+			return
+		}
+		texts = append(texts, part.Text)
+	}
+	message.SetStringContent(strings.Join(texts, "\n"))
 }
 
 // claudeToolResultToChat maps a structured tool_result content array onto Chat Completions,

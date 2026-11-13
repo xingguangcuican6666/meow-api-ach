@@ -149,3 +149,48 @@ func TestClaudeMessagesRequestToOpenAIChatKeepsParallelToolResultsContiguous(t *
 	require.NotNil(t, parts[0].GetImageMedia())
 	assert.Equal(t, dataURL, parts[0].GetImageMedia().Url)
 }
+
+// Strict OpenAI-compatible upstreams reject extension fields, so the pure
+// profile emits only what the Chat Completions schema defines.
+func TestClaudeMessagesRequestToOpenAIChatPureDropsExtensionFields(t *testing.T) {
+	cacheControl := []byte(`{"type":"ephemeral"}`)
+	claudeRequest := dto.ClaudeRequest{
+		Model:       "claude-test",
+		MaxTokens:   lo.ToPtr(uint(64)),
+		Temperature: lo.ToPtr(0.3),
+		TopK:        lo.ToPtr(40),
+		System:      "be brief",
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: []dto.ClaudeMediaMessage{
+				{Type: "text", Text: lo.ToPtr("hello"), CacheControl: cacheControl},
+				{Type: "text", Text: lo.ToPtr("world"), CacheControl: cacheControl},
+			}},
+		},
+	}
+	info := &convmeta.Values{OriginModelName: "claude-test-thinking"}
+
+	standard, err := ClaudeMessagesRequestToOpenAIChat(context.Background(), claudeRequest, info)
+	require.NoError(t, err)
+	require.NotNil(t, standard.TopK)
+	assert.Equal(t, 40, *standard.TopK)
+	assert.Equal(t, "claude-test-thinking", standard.Model)
+	require.Len(t, standard.Messages, 2)
+	standardParts := standard.Messages[1].ParseContent()
+	require.Len(t, standardParts, 2)
+	assert.Equal(t, dto.ContentTypeText, standardParts[0].Type)
+	assert.NotNil(t, standardParts[0].CacheControl)
+
+	pure, err := ClaudeMessagesRequestToOpenAIChatPure(context.Background(), claudeRequest, info)
+	require.NoError(t, err)
+	assert.Nil(t, pure.TopK)
+	assert.Equal(t, "claude-test", pure.Model)
+	require.NotNil(t, pure.MaxTokens)
+	assert.Equal(t, uint(64), *pure.MaxTokens)
+	require.NotNil(t, pure.Temperature)
+	assert.Equal(t, 0.3, *pure.Temperature)
+	require.Len(t, pure.Messages, 2)
+	assert.Equal(t, "system", pure.Messages[0].Role)
+	assert.Equal(t, "be brief", pure.Messages[0].Content)
+	assert.Equal(t, "user", pure.Messages[1].Role)
+	assert.Equal(t, "hello\nworld", pure.Messages[1].Content)
+}

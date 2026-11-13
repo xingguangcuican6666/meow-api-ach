@@ -76,7 +76,8 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	switch converter {
 	case relayconvert.ConverterNone:
 		return a.claudeAdaptor.ConvertClaudeRequest(c, info, request)
-	case relayconvert.ConverterClaudeMessagesToOpenAIChat:
+	case relayconvert.ConverterClaudeMessagesToOpenAIChat,
+		relayconvert.ConverterClaudeMessagesToOpenAIChatPure:
 		return a.convertCrossProtocolChatRequest(c, info, converter, request)
 	default:
 		return nil, fmt.Errorf("converter %q does not support Anthropic Messages requests", converter)
@@ -288,6 +289,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconvert.ConverterNone:
 		return a.doNativeResponse(c, resp, info)
 	case relayconvert.ConverterClaudeMessagesToOpenAIChat,
+		relayconvert.ConverterClaudeMessagesToOpenAIChatPure,
 		relayconvert.ConverterGeminiContentToOpenAIChat:
 		return a.openaiAdaptor.DoResponse(c, resp, info)
 	case relayconvert.ConverterOpenAIChatToClaudeMessages:

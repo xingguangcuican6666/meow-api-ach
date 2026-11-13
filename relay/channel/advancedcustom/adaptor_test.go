@@ -794,6 +794,40 @@ func TestAdaptorConvertsClaudeRequestToOpenAIChatUpstream(t *testing.T) {
 	assert.Equal(t, "user", chatReq.Messages[0].Role)
 }
 
+func TestAdaptorConvertsClaudeRequestToPureOpenAIChatUpstream(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/messages",
+				UpstreamPath: "/v1/chat/completions",
+				Converter:    relayconvert.ConverterClaudeMessagesToOpenAIChatPure,
+			},
+		},
+	})
+	info.RelayFormat = types.RelayFormatClaude
+	info.RequestURLPath = "/v1/messages"
+	c := advancedCustomGinContext("/v1/messages")
+
+	topK := 40
+	converted, err := adaptor.ConvertClaudeRequest(c, info, &dto.ClaudeRequest{
+		Model: "gpt-test",
+		TopK:  &topK,
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "hello"},
+		},
+	})
+	require.NoError(t, err)
+
+	chatReq, ok := converted.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	assert.Equal(t, "gpt-test", chatReq.Model)
+	assert.Nil(t, chatReq.TopK)
+	require.Len(t, chatReq.Messages, 1)
+	assert.Equal(t, "user", chatReq.Messages[0].Role)
+	assert.Equal(t, "hello", chatReq.Messages[0].Content)
+}
+
 func TestAdaptorConvertsGeminiRequestToOpenAIChatUpstream(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{

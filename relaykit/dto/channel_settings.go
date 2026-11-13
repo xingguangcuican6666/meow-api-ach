@@ -560,15 +560,16 @@ func (s *ChannelOtherSettings) ValidateToolLossPolicy() error {
 }
 
 const (
-	AdvancedCustomConverterSGLangRerank                = "jina_rerank_to_sglang"
-	advancedCustomConverterNone                        = "none"
-	advancedCustomConverterClaudeMessagesToOpenAIChat  = "anthropic_messages_to_openai_chat_completions"
-	advancedCustomConverterOpenAIChatToClaudeMessages  = "openai_chat_completions_to_anthropic_messages"
-	advancedCustomConverterOpenAIChatToOpenAIResponses = "openai_chat_completions_to_openai_responses"
-	advancedCustomConverterOpenAIResponsesToOpenAIChat = "openai_responses_to_openai_chat_completions"
-	advancedCustomConverterOpenAIResponsesToGemini     = "openai_responses_to_gemini_generate_content"
-	advancedCustomConverterGeminiContentToOpenAIChat   = "gemini_generate_content_to_openai_chat_completions"
-	advancedCustomConverterOpenAIChatToGeminiContent   = "openai_chat_completions_to_gemini_generate_content"
+	AdvancedCustomConverterSGLangRerank                   = "jina_rerank_to_sglang"
+	advancedCustomConverterNone                           = "none"
+	advancedCustomConverterClaudeMessagesToOpenAIChat     = "anthropic_messages_to_openai_chat_completions"
+	advancedCustomConverterClaudeMessagesToOpenAIChatPure = "anthropic_messages_to_openai_chat_completions_pure"
+	advancedCustomConverterOpenAIChatToClaudeMessages     = "openai_chat_completions_to_anthropic_messages"
+	advancedCustomConverterOpenAIChatToOpenAIResponses    = "openai_chat_completions_to_openai_responses"
+	advancedCustomConverterOpenAIResponsesToOpenAIChat    = "openai_responses_to_openai_chat_completions"
+	advancedCustomConverterOpenAIResponsesToGemini        = "openai_responses_to_gemini_generate_content"
+	advancedCustomConverterGeminiContentToOpenAIChat      = "gemini_generate_content_to_openai_chat_completions"
+	advancedCustomConverterOpenAIChatToGeminiContent      = "openai_chat_completions_to_gemini_generate_content"
 )
 
 const (
@@ -841,6 +842,7 @@ func IsAdvancedCustomConverterAllowed(converter string) bool {
 	case advancedCustomConverterNone,
 		AdvancedCustomConverterSGLangRerank,
 		advancedCustomConverterClaudeMessagesToOpenAIChat,
+		advancedCustomConverterClaudeMessagesToOpenAIChatPure,
 		advancedCustomConverterOpenAIChatToClaudeMessages,
 		advancedCustomConverterOpenAIChatToOpenAIResponses,
 		advancedCustomConverterOpenAIResponsesToOpenAIChat,
@@ -1041,7 +1043,8 @@ func validateAdvancedCustomConverterPath(index int, incomingPath string, convert
 	switch converter {
 	case advancedCustomConverterNone:
 		return nil
-	case advancedCustomConverterClaudeMessagesToOpenAIChat:
+	case advancedCustomConverterClaudeMessagesToOpenAIChat,
+		advancedCustomConverterClaudeMessagesToOpenAIChatPure:
 		if incomingPath == "/v1/messages" {
 			return nil
 		}

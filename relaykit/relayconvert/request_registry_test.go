@@ -22,6 +22,7 @@ func TestRequestConverterRegistryListsSupportedTextConverters(t *testing.T) {
 		advancedCustom bool
 	}{
 		{converter: ConverterClaudeMessagesToOpenAIChat, from: types.RelayFormatClaude, to: types.RelayFormatOpenAI, quality: RequestConverterQualityFair, advancedCustom: true},
+		{converter: ConverterClaudeMessagesToOpenAIChatPure, from: types.RelayFormatClaude, to: types.RelayFormatOpenAI, quality: RequestConverterQualityFair, advancedCustom: true},
 		{converter: ConverterGeminiContentToOpenAIChat, from: types.RelayFormatGemini, to: types.RelayFormatOpenAI, quality: RequestConverterQualityFair, advancedCustom: true},
 		{converter: ConverterOpenAIChatToClaudeMessages, from: types.RelayFormatOpenAI, to: types.RelayFormatClaude, quality: RequestConverterQualityFair, advancedCustom: true},
 		{converter: ConverterOpenAIChatToGeminiContent, from: types.RelayFormatOpenAI, to: types.RelayFormatGemini, quality: RequestConverterQualityFair, advancedCustom: true},
@@ -98,6 +99,26 @@ func TestRequestConverterRegistryListsSupportedTextConverters(t *testing.T) {
 			assert.Equal(t, tt.advancedCustom, dto.IsAdvancedCustomConverterAllowed(tt.converter))
 		})
 	}
+}
+
+// The pure profile is addressable by ID only; automatic Claude -> OpenAI
+// conversion must keep using the standard converter.
+func TestPureChatConverterVariantKeepsDefaultRoute(t *testing.T) {
+	req := &dto.ClaudeRequest{
+		Model: "claude-test",
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "hello"},
+		},
+	}
+
+	automatic, err := ConvertRequest(nil, nil, types.RelayFormatOpenAI, req)
+	require.NoError(t, err)
+	assert.Equal(t, ConverterClaudeMessagesToOpenAIChat, automatic.Converter)
+
+	explicit, err := ConvertRequestByID(nil, nil, ConverterClaudeMessagesToOpenAIChatPure, req)
+	require.NoError(t, err)
+	assert.Equal(t, ConverterClaudeMessagesToOpenAIChatPure, explicit.Converter)
+	assert.IsType(t, &dto.GeneralOpenAIRequest{}, explicit.Value)
 }
 
 func TestConvertRequestToTargetRecordsConversionChain(t *testing.T) {

@@ -560,6 +560,7 @@ func TestAdvancedCustomValidateAlphaSearchConverterPath(t *testing.T) {
 
 	nonNoneConverters := []string{
 		advancedCustomConverterClaudeMessagesToOpenAIChat,
+		advancedCustomConverterClaudeMessagesToOpenAIChatPure,
 		advancedCustomConverterOpenAIChatToClaudeMessages,
 		advancedCustomConverterOpenAIChatToOpenAIResponses,
 		advancedCustomConverterOpenAIResponsesToOpenAIChat,

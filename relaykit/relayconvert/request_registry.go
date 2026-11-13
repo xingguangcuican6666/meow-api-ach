@@ -52,6 +52,10 @@ type RequestConverterSpec struct {
 	Quality        RequestConverterQuality
 	Convert        RequestConverterFunc
 	StepConverters []string
+	// Variant marks a converter that callers must address by ID. It never
+	// becomes the default converter of its from/to route, so several emission
+	// profiles can share one protocol pair.
+	Variant bool
 }
 
 type requestConverterRoute struct {
@@ -77,6 +81,7 @@ const (
 const (
 	ConverterNone                            = "none"
 	ConverterClaudeMessagesToOpenAIChat      = "anthropic_messages_to_openai_chat_completions"
+	ConverterClaudeMessagesToOpenAIChatPure  = "anthropic_messages_to_openai_chat_completions_pure"
 	ConverterOpenAIChatToClaudeMessages      = "openai_chat_completions_to_anthropic_messages"
 	ConverterOpenAIChatToOpenAIResponses     = "openai_chat_completions_to_openai_responses"
 	ConverterOpenAIResponsesToOpenAIChat     = "openai_responses_to_openai_chat_completions"
@@ -107,8 +112,11 @@ func registerBuiltinRequestConverter(spec RequestConverterSpec) {
 		panic(fmt.Sprintf("request converter %q is already registered", spec.ID))
 	}
 	route := requestConverterRoute{from: spec.From, to: spec.To}
-	if existingID, exists := requestConverterRoutes[route]; exists {
-		panic(fmt.Sprintf("request converter route from %s to %s is already registered by %q", spec.From, spec.To, existingID))
+	if !spec.Variant {
+		if existingID, exists := requestConverterRoutes[route]; exists {
+			panic(fmt.Sprintf("request converter route from %s to %s is already registered by %q", spec.From, spec.To, existingID))
+		}
+		requestConverterRoutes[route] = spec.ID
 	}
 
 	if len(spec.StepConverters) > 0 {
@@ -135,8 +143,7 @@ func registerBuiltinRequestConverter(spec RequestConverterSpec) {
 	}
 
 	requestConverters[spec.ID] = spec
-	requestConverterRoutes[route] = spec.ID
-	if len(spec.StepConverters) == 0 {
+	if !spec.Variant && len(spec.StepConverters) == 0 {
 		requestConverterDirectRoutes[route] = spec.ID
 	}
 }
@@ -454,6 +461,32 @@ func convertClaudeRequestToOpenAI(c context.Context, info convmeta.Meta, request
 		return nil, fmt.Errorf("expected Anthropic Messages request, got %T", request)
 	}
 	return claudemessages.ClaudeMessagesRequestToOpenAIChat(c, *claudeRequest, info)
+}
+
+// builtinRequestConverterVariants are addressable by converter ID only: the
+// default converter of their from/to route keeps serving automatic conversion.
+var builtinRequestConverterVariants = []RequestConverterSpec{
+	{
+		ID:      ConverterClaudeMessagesToOpenAIChatPure,
+		From:    types.RelayFormatClaude,
+		To:      types.RelayFormatOpenAI,
+		Quality: RequestConverterQualityFair,
+		Variant: true,
+		Convert: convertClaudeRequestToOpenAIChatPure,
+	},
+}
+
+func convertClaudeRequestToOpenAIChatPure(c context.Context, info convmeta.Meta, request any) (any, error) {
+	claudeRequest, ok := request.(*dto.ClaudeRequest)
+	if !ok {
+		if value, ok := request.(dto.ClaudeRequest); ok {
+			claudeRequest = &value
+		}
+	}
+	if claudeRequest == nil {
+		return nil, fmt.Errorf("expected Anthropic Messages request, got %T", request)
+	}
+	return claudemessages.ClaudeMessagesRequestToOpenAIChatPure(c, *claudeRequest, info)
 }
 
 func convertClaudeRequestToOpenAIResponses(c context.Context, info convmeta.Meta, request any) (any, error) {
