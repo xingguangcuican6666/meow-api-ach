@@ -583,41 +583,9 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		c.Set(common2.UpstreamRequestIdKey, upID)
 	}
 
-	if resp.StatusCode >= http.StatusBadRequest {
-		logRejectedRequestBody(c, req, resp)
-	}
-
 	_ = req.Body.Close()
 	_ = c.Request.Body.Close()
 	return resp, nil
-}
-
-// rejectedRequestBodyLogLimit bounds how much of a rejected payload reaches the
-// log; the head of a JSON body already shows the fields an upstream objected to.
-const rejectedRequestBodyLogLimit = 32 << 10
-
-// logRejectedRequestBody records the body an upstream refused. Neither the relay
-// nor the upstream error message shows the exact payload that was sent, so a 4xx
-// cannot be traced back to the field that caused it. Only replayable JSON bodies
-// are logged, because multipart and binary uploads would only add noise.
-func logRejectedRequestBody(c *gin.Context, req *http.Request, resp *http.Response) {
-	if req.GetBody == nil {
-		return
-	}
-	body, err := req.GetBody()
-	if err != nil {
-		return
-	}
-	defer body.Close()
-	data, err := io.ReadAll(io.LimitReader(body, rejectedRequestBodyLogLimit+1))
-	if err != nil || len(data) == 0 || (data[0] != '{' && data[0] != '[') {
-		return
-	}
-	preview := string(data)
-	if len(data) > rejectedRequestBodyLogLimit {
-		preview = fmt.Sprintf("%s... [truncated, original_length>%d, limit=%d]", data[:rejectedRequestBodyLogLimit], rejectedRequestBodyLogLimit, rejectedRequestBodyLogLimit)
-	}
-	logger.LogError(c, fmt.Sprintf("upstream rejected request body (status_code=%d): %s", resp.StatusCode, preview))
 }
 
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
