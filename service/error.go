@@ -261,6 +261,9 @@ func RelayErrorHandler(c *gin.Context, resp *http.Response, showBodyWhenFail boo
 	var errResponse dto.GeneralErrorResponse
 	responseBodyText := string(responseBody)
 	responseBodyPreview := common.LocalLogPreview(responseBodyText)
+	// Log the verbatim upstream body once, here: the error projected to the
+	// client keeps only a message, which is not enough to diagnose a rejection.
+	logger.LogError(c, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, responseBodyPreview))
 	buildErrWithBody := func(message string) error {
 		if message == "" {
 			return fmt.Errorf("bad response status code %d, body: %s", resp.StatusCode, responseBodyText)
@@ -273,7 +276,6 @@ func RelayErrorHandler(c *gin.Context, resp *http.Response, showBodyWhenFail boo
 		if showBodyWhenFail {
 			newApiErr.Err = buildErrWithBody("")
 		} else {
-			logger.LogError(c, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, responseBodyPreview))
 			newApiErr.Err = fmt.Errorf("bad response status code %d", resp.StatusCode)
 		}
 		return
@@ -286,10 +288,6 @@ func RelayErrorHandler(c *gin.Context, resp *http.Response, showBodyWhenFail boo
 			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
 			if showBodyWhenFail {
 				newApiErr.Err = buildErrWithBody(newApiErr.Error())
-			} else {
-				// The projected error keeps only message/type/code, so log the
-				// verbatim upstream body to keep the rejection diagnosable.
-				logger.LogError(c, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, responseBodyPreview))
 			}
 			// Client-facing standardization is applied once at the relay exit
 			// (controller.Relay defer), so the verbatim Err survives for logs,
@@ -299,11 +297,8 @@ func RelayErrorHandler(c *gin.Context, resp *http.Response, showBodyWhenFail boo
 	}
 	message := errResponse.ToMessage()
 	if message == "" {
-		// The body parsed as JSON but carried no usable error message; log the
-		// raw body so the upstream failure remains diagnosable, and fall back to
-		// a status-based message so client-facing projections do not degrade to
-		// a bare error-type string when standardization is off.
-		logger.LogError(c, fmt.Sprintf("bad response status code %d with empty error message, body: %s", resp.StatusCode, responseBodyPreview))
+		// Fall back to a status-based message so client-facing projections do not
+		// degrade to a bare error-type string when standardization is off.
 		message = fmt.Sprintf("bad response status code %d", resp.StatusCode)
 	}
 	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
