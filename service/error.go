@@ -286,6 +286,10 @@ func RelayErrorHandler(c *gin.Context, resp *http.Response, showBodyWhenFail boo
 			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
 			if showBodyWhenFail {
 				newApiErr.Err = buildErrWithBody(newApiErr.Error())
+			} else {
+				// The projected error keeps only message/type/code, so log the
+				// verbatim upstream body to keep the rejection diagnosable.
+				logger.LogError(c, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, responseBodyPreview))
 			}
 			// Client-facing standardization is applied once at the relay exit
 			// (controller.Relay defer), so the verbatim Err survives for logs,
