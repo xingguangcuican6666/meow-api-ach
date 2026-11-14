@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	common2 "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -593,18 +592,9 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return resp, nil
 }
 
-const (
-	// rejectedRequestBodyReadLimit bounds how much of a rejected payload is read
-	// back; anything larger is logged as a head preview instead.
-	rejectedRequestBodyReadLimit = 4 << 20
-	// rejectedRequestBodyLogLimit bounds the log line itself. It leaves room for
-	// a condensed body of a request that carries a large tool set.
-	rejectedRequestBodyLogLimit = 64 << 10
-	// rejectedRequestBodyStringLimit is the longest string value kept verbatim
-	// when a rejected payload is condensed, so the structure stays visible even
-	// when prompt text and tool descriptions dominate the body.
-	rejectedRequestBodyStringLimit = 200
-)
+// rejectedRequestBodyLogLimit bounds how much of a rejected payload reaches the
+// log; the head of a JSON body already shows the fields an upstream objected to.
+const rejectedRequestBodyLogLimit = 32 << 10
 
 // logRejectedRequestBody records the body an upstream refused. Neither the relay
 // nor the upstream error message shows the exact payload that was sent, so a 4xx
@@ -619,55 +609,15 @@ func logRejectedRequestBody(c *gin.Context, req *http.Request, resp *http.Respon
 		return
 	}
 	defer body.Close()
-	data, err := io.ReadAll(io.LimitReader(body, rejectedRequestBodyReadLimit))
+	data, err := io.ReadAll(io.LimitReader(body, rejectedRequestBodyLogLimit+1))
 	if err != nil || len(data) == 0 || (data[0] != '{' && data[0] != '[') {
 		return
 	}
 	preview := string(data)
-	var parsed any
-	if err := common2.Unmarshal(data, &parsed); err == nil {
-		if condensed, err := common2.Marshal(condenseForLog(parsed)); err == nil {
-			preview = string(condensed)
-		}
-	}
-	if len(preview) > rejectedRequestBodyLogLimit {
-		cut := rejectedRequestBodyLogLimit
-		for cut > 0 && !utf8.RuneStart(preview[cut]) {
-			cut--
-		}
-		preview = fmt.Sprintf("%s... [truncated, length=%d, limit=%d]", preview[:cut], len(preview), rejectedRequestBodyLogLimit)
+	if len(data) > rejectedRequestBodyLogLimit {
+		preview = fmt.Sprintf("%s... [truncated, original_length>%d, limit=%d]", data[:rejectedRequestBodyLogLimit], rejectedRequestBodyLogLimit, rejectedRequestBodyLogLimit)
 	}
 	logger.LogError(c, fmt.Sprintf("upstream rejected request body (status_code=%d): %s", resp.StatusCode, preview))
-}
-
-// condenseForLog keeps the shape of a rejected payload readable in one log line
-// by replacing long string values with their length and head.
-func condenseForLog(value any) any {
-	switch typed := value.(type) {
-	case string:
-		if len(typed) <= rejectedRequestBodyStringLimit {
-			return typed
-		}
-		cut := rejectedRequestBodyStringLimit
-		for cut > 0 && !utf8.RuneStart(typed[cut]) {
-			cut--
-		}
-		return fmt.Sprintf("<%d chars>%s", len(typed), typed[:cut])
-	case []any:
-		condensed := make([]any, len(typed))
-		for i, item := range typed {
-			condensed[i] = condenseForLog(item)
-		}
-		return condensed
-	case map[string]any:
-		condensed := make(map[string]any, len(typed))
-		for key, item := range typed {
-			condensed[key] = condenseForLog(item)
-		}
-		return condensed
-	default:
-		return value
-	}
 }
 
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
