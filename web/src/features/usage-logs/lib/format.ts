@@ -567,6 +567,8 @@ const AUDIT_TEMPLATES: Record<string, string> = {
     'Deleted {{requested}} subscription(s), {{succeeded}} succeeded',
   'subscription.reset_card_grant':
     'Granted {{count}} subscription reset card(s) to {{requested}} user(s), {{succeeded}} succeeded',
+  'subscription.reset_card_generate_codes':
+    'Generated {{count}} ownerless subscription reset card code(s)',
   'subscription.reset_card_invalidate':
     'Disabled {{requested}} reset card(s), {{succeeded}} succeeded',
   'subscription.reset_card_delete':

@@ -22,9 +22,12 @@ import (
 // AdminGrantSubscriptionResetCardRequest is the grant payload. The embedded
 // config keeps the wire shape flat, matching the other subscription requests.
 type AdminGrantSubscriptionResetCardRequest struct {
-	UserIds []int  `json:"user_ids"`
-	Count   int    `json:"count"`
-	Name    string `json:"name"`
+	UserIds []int `json:"user_ids"`
+	// RecipientMode is one of users/filter/all/codes; empty means users.
+	RecipientMode string                                     `json:"recipient_mode"`
+	Filter        model.SubscriptionResetCardRecipientFilter `json:"filter"`
+	Count         int                                        `json:"count"`
+	Name          string                                     `json:"name"`
 	// ExpiredTime is a Unix timestamp; 0 means the cards never expire.
 	ExpiredTime int64 `json:"expired_time"`
 	model.SubscriptionResetCardConfig
@@ -60,7 +63,9 @@ func subscriptionResetCardAudit(cfg model.SubscriptionResetCardConfig) map[strin
 	return params
 }
 
-// AdminGrantSubscriptionResetCards mints reset cards for many users at once.
+// AdminGrantSubscriptionResetCards mints reset cards for the recipients named by
+// the request: an explicit user list, a user filter, every enabled user, or an
+// ownerless batch of redeem codes.
 func AdminGrantSubscriptionResetCards(c *gin.Context) {
 	var req AdminGrantSubscriptionResetCardRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -74,6 +79,8 @@ func AdminGrantSubscriptionResetCards(c *gin.Context) {
 	}
 	result, err := model.BatchGrantSubscriptionResetCards(model.SubscriptionResetCardGrantRequest{
 		UserIds:                     req.UserIds,
+		RecipientMode:               req.RecipientMode,
+		Filter:                      req.Filter,
 		Count:                       req.Count,
 		Name:                        strings.TrimSpace(req.Name),
 		ExpiredTime:                 req.ExpiredTime,
@@ -84,15 +91,42 @@ func AdminGrantSubscriptionResetCards(c *gin.Context) {
 		return
 	}
 	params := subscriptionResetCardAudit(cfg)
+	params["recipient_mode"] = result.RecipientMode
 	params["requested"] = result.Requested
 	params["succeeded"] = result.Succeeded
 	params["failed"] = result.Failed
 	params["count"] = result.Count
 	params["batch_id"] = result.BatchId
+	if result.ResolvedUserCount > 0 {
+		params["resolved_user_count"] = result.ResolvedUserCount
+	}
+	// A filter grant is only reproducible if the conditions that selected the
+	// recipients are on the record; the resolved ids are not enough on their own.
+	if req.RecipientMode == model.SubscriptionResetCardRecipientsFilter {
+		if keyword := strings.TrimSpace(req.Filter.Keyword); keyword != "" {
+			params["filter_keyword"] = keyword
+		}
+		if group := strings.TrimSpace(req.Filter.Group); group != "" {
+			params["filter_group"] = group
+		}
+		if req.Filter.Role > 0 {
+			params["filter_role"] = req.Filter.Role
+		}
+		if req.Filter.Status != 0 {
+			params["filter_status"] = req.Filter.Status
+		}
+	}
 	if len(req.UserIds) > 0 {
 		params["requested_user_ids"] = append([]int{}, req.UserIds[:min(len(req.UserIds), subscriptionBatchAuditMaxIds)]...)
+		if len(req.UserIds) > subscriptionBatchAuditMaxIds {
+			params["requested_user_ids_truncated"] = true
+		}
 	}
-	recordManageAudit(c, "subscription.reset_card_grant", params)
+	action := "subscription.reset_card_grant"
+	if result.RecipientMode == model.SubscriptionResetCardRecipientsCodes {
+		action = "subscription.reset_card_generate_codes"
+	}
+	recordManageAudit(c, action, params)
 	common.ApiSuccess(c, result)
 }
 

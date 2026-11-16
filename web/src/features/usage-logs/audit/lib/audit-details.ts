@@ -147,6 +147,20 @@ export function auditFieldLabel(key: string, t: TFunction): string {
       return t('Subscription ID')
     case 'requested_user_ids':
       return t('Requested user IDs')
+    case 'requested_user_ids_truncated':
+      return t('Requested user IDs truncated')
+    case 'recipient_mode':
+      return t('Recipient mode')
+    case 'resolved_user_count':
+      return t('Resolved user count')
+    case 'filter_keyword':
+      return t('Filter keyword')
+    case 'filter_group':
+      return t('Filter group')
+    case 'filter_role':
+      return t('Filter role')
+    case 'filter_status':
+      return t('Filter status')
     case 'requested':
       return t('Requested')
     case 'succeeded':

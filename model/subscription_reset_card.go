@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -34,6 +35,37 @@ const (
 	SubscriptionResetCardStatusUsed     = "used"
 	SubscriptionResetCardStatusDisabled = "disabled"
 )
+
+// How a grant request names its recipients. An empty mode is treated as
+// RecipientsUsers so requests written before these modes existed keep working.
+const (
+	// SubscriptionResetCardRecipientsUsers mints one set of cards per explicit
+	// user id.
+	SubscriptionResetCardRecipientsUsers = "users"
+	// SubscriptionResetCardRecipientsFilter resolves the recipients from a user
+	// filter at grant time, so an operator can reach a whole group without
+	// listing every member.
+	SubscriptionResetCardRecipientsFilter = "filter"
+	// SubscriptionResetCardRecipientsAll mints cards for every enabled user.
+	SubscriptionResetCardRecipientsAll = "all"
+	// SubscriptionResetCardRecipientsCodes mints ownerless codes: the cards
+	// carry no user id and are redeemed by whoever holds the key.
+	SubscriptionResetCardRecipientsCodes = "codes"
+)
+
+// SubscriptionResetCardRecipientFilter narrows who receives cards. A zero value
+// means "do not filter on this field". It mirrors the user search filters so the
+// operator's mental model is the same one the users table uses.
+type SubscriptionResetCardRecipientFilter struct {
+	// Keyword matches a username, a display name, or a literal user id.
+	Keyword string `json:"keyword"`
+	Group   string `json:"group"`
+	// Role is an exact role value; 0 means any role.
+	Role int `json:"role"`
+	// Status is an exact user status; 0 means enabled users only, because a
+	// disabled or deleted user cannot redeem a card.
+	Status int `json:"status"`
+}
 
 const (
 	// subscriptionResetCardGrantMaxPerUser bounds how many cards one batch may
@@ -292,12 +324,16 @@ func ListUserSubscriptionResetCards(userId int) ([]SubscriptionResetCard, error)
 	return cards, nil
 }
 
-// SubscriptionResetCardGrantRequest asks for count cards per user, all carrying
-// the same configuration.
+// SubscriptionResetCardGrantRequest asks for count cards per recipient, all
+// carrying the same configuration.
 type SubscriptionResetCardGrantRequest struct {
-	UserIds []int  `json:"user_ids"`
-	Count   int    `json:"count"`
-	Name    string `json:"name"`
+	UserIds []int `json:"user_ids"`
+	// RecipientMode selects how UserIds/Filter are interpreted. Empty means
+	// SubscriptionResetCardRecipientsUsers.
+	RecipientMode string                               `json:"recipient_mode"`
+	Filter        SubscriptionResetCardRecipientFilter `json:"filter"`
+	Count         int                                  `json:"count"`
+	Name          string                               `json:"name"`
 	// ExpiredTime is a Unix timestamp; 0 means the cards never expire.
 	ExpiredTime int64 `json:"expired_time"`
 	SubscriptionResetCardConfig
@@ -314,12 +350,75 @@ type SubscriptionResetCardGrantItem struct {
 
 // SubscriptionResetCardGrantResult summarizes a grant request.
 type SubscriptionResetCardGrantResult struct {
-	Requested int                              `json:"requested"`
-	Succeeded int                              `json:"succeeded"`
-	Failed    int                              `json:"failed"`
-	Count     int                              `json:"count"`
-	BatchId   string                           `json:"batch_id"`
-	Items     []SubscriptionResetCardGrantItem `json:"items"`
+	Requested int    `json:"requested"`
+	Succeeded int    `json:"succeeded"`
+	Failed    int    `json:"failed"`
+	Count     int    `json:"count"`
+	BatchId   string `json:"batch_id"`
+	// RecipientMode echoes how the recipients were resolved, so the caller can
+	// report what actually happened rather than what it asked for.
+	RecipientMode string `json:"recipient_mode"`
+	// ResolvedUserCount is how many users the filter/all modes matched. It is 0
+	// in codes mode, where the cards have no recipients.
+	ResolvedUserCount int                              `json:"resolved_user_count"`
+	Items             []SubscriptionResetCardGrantItem `json:"items"`
+}
+
+// resolveRecipientIds turns a user filter into the list of user ids that should
+// receive cards, capped at limit. It deliberately does not reuse SearchUsers:
+// that query runs Unscoped and, when no status is given, returns soft-deleted
+// users too — handing a card to a deleted account would just burn it.
+//
+// It asks for limit+1 rows so an over-limit request is reported as such instead
+// of being silently truncated to the first page of recipients.
+func resolveRecipientIds(filter SubscriptionResetCardRecipientFilter, limit int) ([]int, error) {
+	if limit <= 0 {
+		return nil, ErrSubscriptionBatchEmpty
+	}
+	status := filter.Status
+	switch status {
+	case 0:
+		// Default to enabled users: a disabled account cannot log in to redeem.
+		status = common.UserStatusEnabled
+	case common.UserStatusEnabled, common.UserStatusDisabled:
+	case -1:
+		return nil, errors.New("已删除用户不能接收重置卡")
+	default:
+		return nil, errors.New("无效的用户状态")
+	}
+
+	// The default scope already excludes soft-deleted rows, which is exactly the
+	// guarantee SearchUsers lacks.
+	query := DB.Model(&User{}).Select("id").
+		Where("status = ?", status)
+	if group := strings.TrimSpace(filter.Group); group != "" {
+		query = query.Where(commonGroupCol+" = ?", group)
+	}
+	if filter.Role > 0 {
+		query = query.Where("role = ?", filter.Role)
+	}
+	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
+		if keywordId, err := strconv.Atoi(keyword); err == nil {
+			query = query.Where(
+				"id = ? OR username LIKE ? OR display_name LIKE ?",
+				keywordId, "%"+keyword+"%", "%"+keyword+"%",
+			)
+		} else {
+			query = query.Where(
+				"username LIKE ? OR display_name LIKE ?",
+				"%"+keyword+"%", "%"+keyword+"%",
+			)
+		}
+	}
+
+	var ids []int
+	if err := query.Order("id asc").Limit(limit+1).Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	if len(ids) > limit {
+		return nil, fmt.Errorf("符合条件的用户超过 %d 人，请缩小筛选范围后重试", limit)
+	}
+	return ids, nil
 }
 
 // uniquePositiveInts drops non-positive and duplicate user ids, preserving the
@@ -352,14 +451,49 @@ func defaultSubscriptionResetCardName(cfg SubscriptionResetCardConfig) string {
 	}
 }
 
-// BatchGrantSubscriptionResetCards mints count cards for each user, one
-// transaction per user so a missing user only fails that entry. Every card in
-// the batch shares one BatchId.
+// BatchGrantSubscriptionResetCards mints count cards per recipient, one
+// transaction per recipient so a missing user only fails that entry. Every card
+// in the batch shares one BatchId.
+//
+// Recipients come from one of four modes: an explicit id list, a user filter, or
+// every enabled user. The fourth mode mints ownerless codes, which carry user id
+// 0 and are redeemed by whoever holds the key.
 func BatchGrantSubscriptionResetCards(req SubscriptionResetCardGrantRequest) (*SubscriptionResetCardGrantResult, error) {
-	userIds := uniquePositiveInts(req.UserIds)
-	if err := validateSubscriptionBatchInput(userIds); err != nil {
-		return nil, err
+	mode := strings.TrimSpace(req.RecipientMode)
+	if mode == "" {
+		mode = SubscriptionResetCardRecipientsUsers
 	}
+	var userIds []int
+	switch mode {
+	case SubscriptionResetCardRecipientsUsers:
+		userIds = uniquePositiveInts(req.UserIds)
+		if err := validateSubscriptionBatchInput(userIds); err != nil {
+			return nil, err
+		}
+	case SubscriptionResetCardRecipientsFilter, SubscriptionResetCardRecipientsAll:
+		filter := req.Filter
+		if mode == SubscriptionResetCardRecipientsAll {
+			// All users means "all users the filter would match with nothing
+			// set", so any condition the caller left in the payload cannot
+			// silently narrow the batch.
+			filter = SubscriptionResetCardRecipientFilter{}
+		}
+		resolved, err := resolveRecipientIds(filter, subscriptionBatchMax)
+		if err != nil {
+			return nil, err
+		}
+		if len(resolved) == 0 {
+			return nil, ErrSubscriptionBatchEmpty
+		}
+		userIds = resolved
+	case SubscriptionResetCardRecipientsCodes:
+		// An ownerless code has no recipient; the per-recipient loop below runs
+		// once with id 0 so the batch still gets one BatchId and one result item.
+		userIds = []int{0}
+	default:
+		return nil, errors.New("无效的收件人模式")
+	}
+
 	count := req.Count
 	if count <= 0 {
 		count = 1
@@ -373,6 +507,11 @@ func BatchGrantSubscriptionResetCards(req SubscriptionResetCardGrantRequest) (*S
 	cfg := req.SubscriptionResetCardConfig.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+	if mode == SubscriptionResetCardRecipientsCodes && cfg.TargetScope == SubscriptionResetCardScopeSubscription {
+		// A subscription belongs to one user, so an ownerless code could never
+		// match it for anyone else. Refuse instead of minting a dead card.
+		return nil, errors.New("兑换码不能指定单个订阅")
 	}
 	if cfg.TargetScope == SubscriptionResetCardScopePlan {
 		if _, err := getSubscriptionPlanByIdTx(nil, cfg.PlanId); err != nil {
@@ -401,17 +540,24 @@ func BatchGrantSubscriptionResetCards(req SubscriptionResetCardGrantRequest) (*S
 
 	batchId := common.GetUUID()
 	result := &SubscriptionResetCardGrantResult{
-		Requested: len(userIds),
-		Count:     count,
-		BatchId:   batchId,
-		Items:     make([]SubscriptionResetCardGrantItem, 0, len(userIds)),
+		Requested:     len(userIds),
+		Count:         count,
+		BatchId:       batchId,
+		RecipientMode: mode,
+		Items:         make([]SubscriptionResetCardGrantItem, 0, len(userIds)),
+	}
+	if mode != SubscriptionResetCardRecipientsCodes {
+		result.ResolvedUserCount = len(userIds)
 	}
 	for _, userId := range userIds {
 		outcome := SubscriptionResetCardGrantItem{UserId: userId}
 		err := DB.Transaction(func(tx *gorm.DB) error {
-			var user User
-			if err := tx.Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
-				return errors.New("用户不存在")
+			// Ownerless codes have no user row to verify.
+			if userId > 0 {
+				var user User
+				if err := tx.Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
+					return errors.New("用户不存在")
+				}
 			}
 			now := GetDBTimestampTx(tx)
 			cards := make([]SubscriptionResetCard, 0, count)
@@ -476,8 +622,12 @@ type SubscriptionResetCardUseResult struct {
 }
 
 // RedeemSubscriptionResetCard consumes one card held by userId and applies its
-// configuration. The card is located by id when cardId > 0, otherwise by key;
-// both forms only ever match the caller's own cards.
+// configuration. The card is located by id when cardId > 0, otherwise by key.
+//
+// A card with a user id belongs to that user alone. A card with user id 0 is an
+// ownerless redeem code: any signed-in user holding its key may spend it. That
+// is why the id lookup keeps `user_id = ?`: an ownerless card must never be
+// reachable by guessing ids, only by presenting the key.
 //
 // The card is flipped unused -> used with a compare-and-swap before any counter
 // is touched, and the reset runs in the same transaction: a card that finds no
@@ -509,9 +659,9 @@ func RedeemSubscriptionResetCard(userId int, cardId int, key string) (*Subscript
 		if err := query.First(&card).Error; err != nil {
 			return ErrSubscriptionResetCardNotFound
 		}
-		// A card belongs to exactly one user; a key handed to someone else is
-		// indistinguishable from a key that does not exist.
-		if card.UserId != userId {
+		// An owned card is indistinguishable from a missing one for anyone but
+		// its holder; an ownerless code is open to every holder of the key.
+		if card.UserId != 0 && card.UserId != userId {
 			return ErrSubscriptionResetCardNotFound
 		}
 		switch card.Status {

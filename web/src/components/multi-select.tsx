@@ -93,6 +93,15 @@ interface MultiSelectProps {
    * a query that repopulates `options`; local callers can ignore it.
    */
   onInputValueChange?: (value: string) => void
+  /**
+   * Match the search text against each option's label instead of its value.
+   *
+   * Remote-search callers need this: Base UI's default filter matches the raw
+   * value, so a user found by username is then filtered out by its numeric id
+   * and the dropdown looks empty. Local callers are unaffected because their
+   * values and labels usually read the same.
+   */
+  filterByLabel?: boolean
 }
 
 const COMMA_REGEX = /[,，\n]/
@@ -308,6 +317,11 @@ export function MultiSelect(props: MultiSelectProps) {
       open={open}
       onOpenChange={setOpen}
       disabled={props.disabled}
+      itemToStringLabel={
+        props.filterByLabel
+          ? (value: string) => labelMap.get(value) ?? value
+          : undefined
+      }
     >
       <ComboboxChips
         ref={chipsAnchorRef}

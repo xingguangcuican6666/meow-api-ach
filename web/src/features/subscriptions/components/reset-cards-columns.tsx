@@ -140,14 +140,24 @@ export function useResetCardsColumns(): ColumnDef<SubscriptionResetCardListItem>
         accessorFn: (row) => row.username,
         id: 'user',
         header: t('User'),
-        cell: ({ row }) => (
-          <div className='max-w-full min-w-0'>
-            <div className='truncate'>{row.original.username || '-'}</div>
-            <div className='text-muted-foreground text-xs'>
-              ID: {row.original.card.user_id}
+        cell: ({ row }) => {
+          // Ownerless codes have no holder until someone redeems one.
+          if (row.original.card.user_id === 0) {
+            return (
+              <span className='text-muted-foreground text-xs'>
+                {t('Unbound')}
+              </span>
+            )
+          }
+          return (
+            <div className='max-w-full min-w-0'>
+              <div className='truncate'>{row.original.username || '-'}</div>
+              <div className='text-muted-foreground text-xs'>
+                ID: {row.original.card.user_id}
+              </div>
             </div>
-          </div>
-        ),
+          )
+        },
         size: 150,
       },
       {

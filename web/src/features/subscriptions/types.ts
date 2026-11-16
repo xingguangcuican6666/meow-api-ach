@@ -306,6 +306,27 @@ export type SubscriptionResetCardStatus =
   (typeof SUBSCRIPTION_RESET_CARD_STATUSES)[number]
 
 /**
+ * How a grant names its recipients. `codes` mints ownerless redeem codes
+ * instead of cards addressed to a user.
+ */
+export const RESET_CARD_RECIPIENT_MODES = [
+  'users',
+  'filter',
+  'all',
+  'codes',
+] as const
+
+export type ResetCardRecipientMode = (typeof RESET_CARD_RECIPIENT_MODES)[number]
+
+/** Server-side user filter used by the `filter` and `all` recipient modes. */
+export interface ResetCardRecipientFilter {
+  keyword?: string
+  group?: string
+  role?: number
+  status?: number
+}
+
+/**
  * A one-shot voucher that resets subscription counters. The reset selection is
  * frozen on the card when root grants it; the target list is resolved when the
  * holder redeems it.
@@ -347,7 +368,10 @@ export interface SubscriptionResetScopePayload {
 }
 
 export interface GrantSubscriptionResetCardsRequest extends SubscriptionResetScopePayload {
-  user_ids: number[]
+  /** Defaults to `users` on the server when omitted. */
+  recipient_mode?: ResetCardRecipientMode
+  user_ids?: number[]
+  filter?: ResetCardRecipientFilter
   count: number
   name?: string
   expired_time?: number
@@ -371,6 +395,9 @@ export interface SubscriptionResetCardGrantResult {
   failed: number
   count: number
   batch_id: string
+  recipient_mode: ResetCardRecipientMode
+  /** Users the filter/all modes matched; 0 for codes, which have none. */
+  resolved_user_count: number
   items: SubscriptionResetCardGrantItem[]
 }
 

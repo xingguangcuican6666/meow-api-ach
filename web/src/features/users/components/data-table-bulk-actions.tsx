@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
-import { CreditCard } from 'lucide-react'
+import { CreditCard, Ticket } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -29,6 +29,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { GrantPlanDialog } from '@/features/subscriptions/components/dialogs/grant-plan-dialog'
+import { GrantResetCardToUsersDialog } from '@/features/subscriptions/components/dialogs/grant-reset-card-to-users-dialog'
 
 import type { User } from '../types'
 
@@ -39,6 +40,7 @@ interface DataTableBulkActionsProps {
 export function DataTableBulkActions({ table }: DataTableBulkActionsProps) {
   const { t } = useTranslation()
   const [grantOpen, setGrantOpen] = useState(false)
+  const [grantCardsOpen, setGrantCardsOpen] = useState(false)
   const selectedUsers = table
     .getFilteredSelectedRowModel()
     .rows.map((row) => row.original)
@@ -62,11 +64,37 @@ export function DataTableBulkActions({ table }: DataTableBulkActionsProps) {
           </TooltipTrigger>
           <TooltipContent>{t('Grant subscription plan')}</TooltipContent>
         </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='outline'
+                size='icon'
+                className='size-8'
+                aria-label={t('Grant reset cards')}
+                onClick={() => setGrantCardsOpen(true)}
+              />
+            }
+          >
+            <Ticket aria-hidden='true' />
+          </TooltipTrigger>
+          <TooltipContent>{t('Grant reset cards')}</TooltipContent>
+        </Tooltip>
       </BulkActionsToolbar>
 
       <GrantPlanDialog
         open={grantOpen}
         onOpenChange={setGrantOpen}
+        users={selectedUsers.map((user) => ({
+          id: user.id,
+          username: user.username,
+        }))}
+        onSuccess={() => table.resetRowSelection()}
+      />
+
+      <GrantResetCardToUsersDialog
+        open={grantCardsOpen}
+        onOpenChange={setGrantCardsOpen}
         users={selectedUsers.map((user) => ({
           id: user.id,
           username: user.username,

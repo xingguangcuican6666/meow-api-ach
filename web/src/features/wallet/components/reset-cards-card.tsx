@@ -20,11 +20,13 @@ Original project: https://github.com/QuantumNous/new-api
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { TFunction } from 'i18next'
 import { RotateCcw, Ticket } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TitledCard } from '@/components/ui/titled-card'
 import {
@@ -75,12 +77,14 @@ function isExpired(card: SubscriptionResetCard): boolean {
 
 /**
  * The holder's side of the reset-card system: every unused card root granted to
- * this user, each redeemable independently. Cards disappear from this list once
- * spent, so what remains is always actionable.
+ * this user, each redeemable independently, plus a field for entering a key
+ * handed out in an activity. Ownerless codes never appear in the list until
+ * they are redeemed, so the key field is the only way to spend one.
  */
 export function ResetCardsCard() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const [keyInput, setKeyInput] = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['self-subscription-reset-cards'],
@@ -90,6 +94,14 @@ export function ResetCardsCard() {
     },
     staleTime: 30_000,
   })
+
+  const refreshAfterRedeem = () => {
+    void queryClient.invalidateQueries({
+      queryKey: ['self-subscription-reset-cards'],
+    })
+    // Subscription usage shown elsewhere on the page is now stale.
+    void queryClient.invalidateQueries({ queryKey: ['self-subscription'] })
+  }
 
   const redeem = useMutation({
     mutationFn: async (cardId: number) => {
@@ -101,11 +113,25 @@ export function ResetCardsCard() {
       toast.success(
         t('Reset {{count}} subscriptions', { count: result?.reset_count ?? 0 })
       )
-      void queryClient.invalidateQueries({
-        queryKey: ['self-subscription-reset-cards'],
-      })
-      // Subscription usage shown elsewhere on the page is now stale.
-      void queryClient.invalidateQueries({ queryKey: ['self-subscription'] })
+      refreshAfterRedeem()
+    },
+    onError: (error) => {
+      handleServerError(error, t('Failed to redeem reset card'))
+    },
+  })
+
+  const redeemByKey = useMutation({
+    mutationFn: async (key: string) => {
+      const result = await redeemSubscriptionResetCard({ key })
+      if (!result.success) throw createServerError(result)
+      return result.data
+    },
+    onSuccess: (result) => {
+      toast.success(
+        t('Reset {{count}} subscriptions', { count: result?.reset_count ?? 0 })
+      )
+      setKeyInput('')
+      refreshAfterRedeem()
     },
     onError: (error) => {
       handleServerError(error, t('Failed to redeem reset card'))
@@ -113,8 +139,7 @@ export function ResetCardsCard() {
   })
 
   const cards = (data || []).filter((card) => card.status === 'unused')
-  // A user with no cards never sees the section; there is nothing to explain.
-  if (!isLoading && cards.length === 0) return null
+  const submittingKey = redeemByKey.isPending
 
   return (
     <TitledCard
@@ -125,11 +150,48 @@ export function ResetCardsCard() {
       icon={<Ticket className='h-4 w-4' />}
       iconTone='info'
     >
+      <div className='border-b p-3 sm:p-4'>
+        <form
+          className='flex flex-col gap-2 sm:flex-row'
+          onSubmit={(event) => {
+            event.preventDefault()
+            const key = keyInput.trim()
+            if (!key || submittingKey) return
+            redeemByKey.mutate(key)
+          }}
+        >
+          <Input
+            value={keyInput}
+            placeholder={t('Enter a reset code')}
+            aria-label={t('Enter a reset code')}
+            disabled={submittingKey}
+            onChange={(event) => setKeyInput(event.target.value)}
+            className='font-mono'
+          />
+          <Button
+            type='submit'
+            className='shrink-0'
+            disabled={!keyInput.trim() || submittingKey}
+          >
+            {submittingKey ? t('Redeeming...') : t('Redeem code')}
+          </Button>
+        </form>
+        <p className='text-muted-foreground mt-1 text-xs'>
+          {t(
+            'Got a code from an activity? Enter it here to spend it. Codes are not shown in the list below until redeemed.'
+          )}
+        </p>
+      </div>
+
       {isLoading ? (
         <div className='flex flex-col gap-2 p-4'>
           <Skeleton className='h-10 w-full' />
           <Skeleton className='h-10 w-full' />
         </div>
+      ) : cards.length === 0 ? (
+        <p className='text-muted-foreground p-4 text-sm'>
+          {t('No reset cards yet.')}
+        </p>
       ) : (
         <ul className='divide-y'>
           {cards.map((card) => {

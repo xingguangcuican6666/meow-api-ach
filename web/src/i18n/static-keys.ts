@@ -620,6 +620,10 @@ export const STATIC_I18N_KEYS = [
   'All active subscriptions',
   'Subscriptions of one plan',
   'One specific subscription',
+  'Specific users',
+  'Users matching a filter',
+  'All users',
+  'Redeem codes',
 
   // Sidebar modules
   'Chat Area',

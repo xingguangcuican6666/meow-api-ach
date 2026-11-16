@@ -75,9 +75,10 @@ var auditContentTemplates = map[string]string{
 	"subscription.batch_reset":      "Batch reset ${requested} subscription(s), ${succeeded} succeeded",
 	"subscription.batch_grant":      "Batch granted plan ${plan_id} to ${requested} user(s), ${succeeded} succeeded",
 
-	"subscription.reset_card_grant":      "Granted ${count} subscription reset card(s) to ${requested} user(s), ${succeeded} succeeded",
-	"subscription.reset_card_invalidate": "Disabled ${requested} reset card(s), ${succeeded} succeeded",
-	"subscription.reset_card_delete":     "Deleted ${requested} reset card(s), ${succeeded} succeeded",
+	"subscription.reset_card_grant":          "Granted ${count} subscription reset card(s) to ${requested} user(s), ${succeeded} succeeded",
+	"subscription.reset_card_generate_codes": "Generated ${count} ownerless subscription reset card code(s)",
+	"subscription.reset_card_invalidate":     "Disabled ${requested} reset card(s), ${succeeded} succeeded",
+	"subscription.reset_card_delete":         "Deleted ${requested} reset card(s), ${succeeded} succeeded",
 }
 
 func recordPasskeyDomainAudit(c *gin.Context, change *model.PasskeyDomainChange, confirmed bool, err error) {
