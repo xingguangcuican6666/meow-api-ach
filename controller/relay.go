@@ -152,6 +152,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = relay.RefundFailedRequestBilling(c, relayInfo, newAPIError)
 	}()
 
+	// Snapshot the harness quota headers now: BillingSource is settled and the
+	// request has not been sent yet, and settlement happens after the response
+	// body is already written.
+	service.SnapshotHarnessUsageHeaders(c, relayInfo)
+
 	retryParam := &service.RetryParam{
 		Ctx:         c,
 		TokenGroup:  relayInfo.TokenGroup,

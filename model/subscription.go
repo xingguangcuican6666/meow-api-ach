@@ -166,6 +166,12 @@ type SubscriptionPlan struct {
 	// Allow falling back to wallet balance after subscription quota is exhausted (empty = true)
 	AllowWalletOverflow *bool `json:"allow_wallet_overflow"`
 
+	// ReportUsageToHarness marks this plan's quota usage as reportable to the
+	// Claude Code / Codex CLI usage headers. Empty means false: reporting is
+	// opt-in per plan, and the global harness_usage_setting switch must also be
+	// on before anything is emitted.
+	ReportUsageToHarness *bool `json:"report_usage_to_harness"`
+
 	StripePriceId         string `json:"stripe_price_id" gorm:"type:varchar(128);default:''"`
 	CreemProductId        string `json:"creem_product_id" gorm:"type:varchar(128);default:''"`
 	WaffoPancakeProductId string `json:"waffo_pancake_product_id" gorm:"type:varchar(128);default:''"`
@@ -219,6 +225,16 @@ func (p *SubscriptionPlan) NormalizeDefaults() {
 	if p.AllowWalletOverflow == nil {
 		p.AllowWalletOverflow = common.GetPointer(true)
 	}
+	if p.ReportUsageToHarness == nil {
+		p.ReportUsageToHarness = common.GetPointer(false)
+	}
+}
+
+// ReportsUsageToHarness reports whether this plan opted into the harness usage
+// headers. A nil pointer (a plan row written before the column existed) means
+// no: reporting must be explicitly enabled per plan.
+func (p *SubscriptionPlan) ReportsUsageToHarness() bool {
+	return p != nil && p.ReportUsageToHarness != nil && *p.ReportUsageToHarness
 }
 
 // Subscription order (payment -> webhook -> create UserSubscription)

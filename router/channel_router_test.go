@@ -62,3 +62,28 @@ func assertChannelRoutePermission(t *testing.T, method string, path string, perm
 	}
 	t.Fatalf("route %s %s not found", method, path)
 }
+
+// Claude Code's /usage page reads GET /api/oauth/usage, which shares its first
+// segment with the /api/oauth/:provider wildcard. A wildcard registered after a
+// literal sibling is only shadowed when the handler list comes from a different
+// wrapper chain, so asserting the resolved route handler guards the split if
+// either the middleware list or the registration order changes.
+func TestHarnessUsageRouteIsNotCapturedByOAuthProviderWildcard(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+
+	resolved := make(map[string]any)
+	for _, route := range engine.Routes() {
+		if route.Method == http.MethodGet && (route.Path == "/api/oauth/usage" || route.Path == "/api/oauth/:provider") {
+			resolved[route.Path] = route.HandlerFunc
+		}
+	}
+	require.Contains(t, resolved, "/api/oauth/usage")
+	require.Contains(t, resolved, "/api/oauth/:provider")
+	// Gin returns the parameter node for an exact literal match unless the two
+	// nodes carry different handler lists, so "/api/oauth/usage" must still
+	// resolve to GetHarnessUsage rather than the OAuth provider handler.
+	assert.Equal(t, reflect.ValueOf(controller.GetHarnessUsage).Pointer(), reflect.ValueOf(resolved["/api/oauth/usage"]).Pointer())
+	assert.Equal(t, reflect.ValueOf(controller.HandleOAuth).Pointer(), reflect.ValueOf(resolved["/api/oauth/:provider"]).Pointer())
+}

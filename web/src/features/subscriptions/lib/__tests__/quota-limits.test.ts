@@ -134,6 +134,30 @@ describe('plan quota limits form mapping', () => {
   })
 })
 
+describe('plan harness usage reporting switch', () => {
+  test('an absent switch reads as off so old plans never start reporting', () => {
+    const values = planToFormValues(basePlan())
+    expect(values.report_usage_to_harness).toBe(false)
+    expect(PLAN_FORM_DEFAULTS.report_usage_to_harness).toBe(false)
+  })
+
+  test('an enabled switch survives the round trip', () => {
+    const plan = basePlan({ report_usage_to_harness: true })
+    const values = planToFormValues(plan)
+
+    expect(values.report_usage_to_harness).toBe(true)
+    expect(formValuesToPlanPayload(values).plan.report_usage_to_harness).toBe(
+      true
+    )
+  })
+
+  test('a disabled switch round trips as false instead of being dropped', () => {
+    const payload = formValuesToPlanPayload(planToFormValues(basePlan()))
+
+    expect(payload.plan.report_usage_to_harness).toBe(false)
+  })
+})
+
 describe('quota limit display formatting', () => {
   test.each([
     { seconds: 0, want: 'Whole subscription period' },

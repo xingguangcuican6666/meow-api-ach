@@ -66,6 +66,11 @@ export const subscriptionPlanSchema = z.object({
   sort_order: z.number(),
   allow_balance_pay: z.boolean().optional().default(true),
   allow_wallet_overflow: z.boolean().optional().default(true),
+  /**
+   * Opt this plan's quota usage into the Claude Code / Codex CLI usage headers.
+   * Off by default; the global harness switch must also be on.
+   */
+  report_usage_to_harness: z.boolean().optional().default(false),
   max_purchase_per_user: z.number(),
   total_amount: z.number(),
   /**

@@ -408,6 +408,8 @@ export type OperationsSettings = {
   'data_capture_setting.enabled': boolean
   'data_capture_setting.max_body_kb': number
   'data_capture_setting.dir': string
+  'harness_usage_setting.enabled': boolean
+  'harness_usage_setting.codex_limit_id': string
   'performance_setting.disk_cache_enabled': boolean
   'performance_setting.disk_cache_threshold_mb': number
   'performance_setting.disk_cache_max_size_mb': number
