@@ -65,7 +65,10 @@ type harnessUsageWindow struct {
 	Group         string
 	Total         int64
 	Used          int64
-	ResetAt       int64
+	// WindowFrom is the latest anchor among the merged limits. It is raw: it
+	// says when the counter last restarted, not when it will reset, so callers
+	// run it through ClampWindowResetAt before showing a countdown.
+	WindowFrom int64
 }
 
 // utilization returns the used fraction, clamped to [0, 1] so a stale counter
@@ -76,6 +79,26 @@ func (w harnessUsageWindow) utilization() float64 {
 	}
 	used := float64(w.Used) / float64(w.Total)
 	return min(max(used, 0), 1)
+}
+
+// ClampWindowResetAt returns the reset timestamp worth reporting at now, or 0.
+//
+// WindowFrom is a rolling anchor that only moves when an elapsed window
+// restarts, so anchor + WindowSeconds is the moment the counter would really
+// roll. While requests keep arriving the window never gets there — a refilled
+// counter starts moving again — so the countdown would sit at a full window
+// forever. Report it only when the counter is spent, which is exactly when the
+// window is guaranteed to roll at that timestamp; with room left the bar shows
+// usage alone and the number is not a promise we cannot keep.
+func ClampWindowResetAt(windowFrom int64, windowSeconds int64, now int64, used int64, total int64) int64 {
+	if windowFrom <= 0 || windowSeconds <= 0 || total <= 0 || used < total {
+		return 0
+	}
+	resetAt := windowFrom + windowSeconds
+	if resetAt <= now {
+		return 0
+	}
+	return resetAt
 }
 
 // SnapshotHarnessUsageHeaders computes the quota headers once, after billing has
@@ -97,19 +120,20 @@ func SnapshotHarnessUsageHeaders(c *gin.Context, info *relaycommon.RelayInfo) {
 		return
 	}
 
+	now := common.GetTimestamp()
 	headers := make(map[string]string)
 	switch harnessHeaderFamily(info) {
 	case types.RelayFormatClaude:
 		fillClaudeUsageHeaders(headers, windows, walletUsage{
 			Available: walletAvailable(info),
 			InUse:     info.BillingSource == BillingSourceWallet,
-		})
+		}, now)
 	case types.RelayFormatOpenAIResponses:
 		balance := 0
 		if info != nil {
 			balance = info.UserQuota
 		}
-		fillCodexUsageHeaders(headers, windows, setting.CodexHeaderPrefix(), balance)
+		fillCodexUsageHeaders(headers, windows, setting.CodexHeaderPrefix(), balance, now)
 	}
 	if len(headers) == 0 {
 		return
@@ -239,11 +263,8 @@ func collectHarnessUsageWindows(userId int) []harnessUsageWindow {
 				}
 				window.Total += limit.AmountTotal
 				window.Used += used
-				if windowFrom > 0 {
-					resetAt := windowFrom + limit.WindowSeconds
-					if resetAt > window.ResetAt {
-						window.ResetAt = resetAt
-					}
+				if windowFrom > window.WindowFrom {
+					window.WindowFrom = windowFrom
 				}
 			}
 		}
@@ -349,7 +370,7 @@ type walletUsage struct {
 // fraction with two decimals; reset is unix seconds. surpassed-threshold and
 // fallback are intentionally omitted: sending them would take over Claude
 // Code's early-warning logic.
-func fillClaudeUsageHeaders(headers map[string]string, windows []harnessUsageWindow, wallet walletUsage) {
+func fillClaudeUsageHeaders(headers map[string]string, windows []harnessUsageWindow, wallet walletUsage, now int64) {
 	has5h, has7d := false, false
 	var reset5h, reset7d int64
 	for _, window := range windows {
@@ -360,20 +381,20 @@ func fillClaudeUsageHeaders(headers map[string]string, windows []harnessUsageWin
 		switch window.WindowSeconds {
 		case model.SubscriptionLimitWindow5h:
 			abbrev, has5h = claudeClaim5h, true
-			if window.ResetAt > reset5h {
-				reset5h = window.ResetAt
+			if reset := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); reset > reset5h {
+				reset5h = reset
 			}
 		case model.SubscriptionLimitWindow7d:
 			abbrev, has7d = claudeClaim7d, true
-			if window.ResetAt > reset7d {
-				reset7d = window.ResetAt
+			if reset := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); reset > reset7d {
+				reset7d = reset
 			}
 		default:
 			continue
 		}
 		headers[claudeHeaderPrefix+abbrev+"-utilization"] = fmt.Sprintf("%.2f", window.utilization())
-		if window.ResetAt > 0 {
-			headers[claudeHeaderPrefix+abbrev+"-reset"] = fmt.Sprintf("%d", window.ResetAt)
+		if reset := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); reset > 0 {
+			headers[claudeHeaderPrefix+abbrev+"-reset"] = fmt.Sprintf("%d", reset)
 		}
 	}
 	for _, window := range windows {
@@ -391,8 +412,8 @@ func fillClaudeUsageHeaders(headers map[string]string, windows []harnessUsageWin
 		}
 		prefix := claudeHeaderPrefix + abbrev + "_" + sanitizeHeaderToken(window.Group)
 		headers[prefix+"-utilization"] = fmt.Sprintf("%.2f", window.utilization())
-		if window.ResetAt > 0 {
-			headers[prefix+"-reset"] = fmt.Sprintf("%d", window.ResetAt)
+		if reset := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); reset > 0 {
+			headers[prefix+"-reset"] = fmt.Sprintf("%d", reset)
 		}
 	}
 
@@ -432,7 +453,7 @@ func fillClaudeUsageHeaders(headers map[string]string, windows []harnessUsageWin
 // Codex orders windows primary (shortest) then secondary; anything beyond two
 // window lengths has no header to live in and is dropped rather than invented.
 // used-percent is 0-100, window-minutes is minutes, reset-at is unix seconds.
-func fillCodexUsageHeaders(headers map[string]string, windows []harnessUsageWindow, prefix string, balanceQuota int) {
+func fillCodexUsageHeaders(headers map[string]string, windows []harnessUsageWindow, prefix string, balanceQuota int, now int64) {
 	var global []harnessUsageWindow
 	perGroup := make(map[string][]harnessUsageWindow)
 	for _, window := range windows {
@@ -446,8 +467,8 @@ func fillCodexUsageHeaders(headers map[string]string, windows []harnessUsageWind
 	writeCodexWindow := func(prefix string, window harnessUsageWindow, slot string) {
 		headers[prefix+"-"+slot+"-used-percent"] = fmt.Sprintf("%.2f", window.utilization()*100)
 		headers[prefix+"-"+slot+"-window-minutes"] = fmt.Sprintf("%d", window.WindowSeconds/60)
-		if window.ResetAt > 0 {
-			headers[prefix+"-"+slot+"-reset-at"] = fmt.Sprintf("%d", window.ResetAt)
+		if reset := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); reset > 0 {
+			headers[prefix+"-"+slot+"-reset-at"] = fmt.Sprintf("%d", reset)
 		}
 	}
 
@@ -550,11 +571,11 @@ func BuildHarnessUsageResponse(userId int, walletQuota int) *HarnessUsageRespons
 		return nil
 	}
 
+	now := common.GetTimestamp()
 	response := &HarnessUsageResponse{}
 	for _, window := range windows {
 		period := &HarnessUsagePeriod{Utilization: window.utilization() * 100}
-		if window.ResetAt > 0 {
-			resetAt := window.ResetAt
+		if resetAt := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); resetAt > 0 {
 			period.ResetsAt = &resetAt
 		}
 		if window.Group != "" {

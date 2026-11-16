@@ -22,6 +22,7 @@ package service
 
 import (
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -212,7 +213,11 @@ func TestHarnessUsageClaudeHeaders(t *testing.T) {
 	assert.Equal(t, "0.25", headers["anthropic-ratelimit-unified-7d_sonnet-utilization"])
 	assert.Equal(t, "allowed", headers["anthropic-ratelimit-unified-status"])
 	assert.Equal(t, "7d", headers["anthropic-ratelimit-unified-representative-claim"])
-	assert.NotEmpty(t, headers["anthropic-ratelimit-unified-7d-reset"])
+	// Both windows still have room, so neither has a boundary to promise: a
+	// rolling window that keeps getting traffic may never reach its anchor.
+	assert.NotContains(t, headers, "anthropic-ratelimit-unified-5h-reset")
+	assert.NotContains(t, headers, "anthropic-ratelimit-unified-7d-reset")
+	assert.NotContains(t, headers, "anthropic-ratelimit-unified-reset")
 
 	// Threshold and fallback headers would hijack Claude Code's own warnings.
 	for key := range headers {
@@ -372,6 +377,32 @@ func TestHarnessUsageWindowRollsWithoutPersisting(t *testing.T) {
 	assert.EqualValues(t, 80, reloaded.QuotaLimitStates[0].Used)
 }
 
+// A spent window is the one case where reset is a real promise: with no room
+// left no further charge can restart it, so anchor + window is when it rolls.
+func TestHarnessUsageReportsResetForExhaustedWindow(t *testing.T) {
+	now := common.GetTimestamp()
+	userId := 980106
+	seedHarnessUsagePlan(t, userId, true,
+		[]model.SubscriptionQuotaLimit{
+			{Key: "5h", WindowSeconds: model.SubscriptionLimitWindow5h, AmountTotal: 100},
+		},
+		[]model.SubscriptionQuotaLimitState{
+			{Key: "5h", Used: 100, WindowFrom: now - 600},
+		},
+	)
+	setHarnessUsageEnabled(t, true)
+
+	headers := snapshotHeaders(t, claudeRelayInfo(userId, 0))
+	assert.Equal(t, "1.00", headers["anthropic-ratelimit-unified-5h-utilization"])
+	assert.Equal(t, strconv.FormatInt(now-600+model.SubscriptionLimitWindow5h, 10),
+		headers["anthropic-ratelimit-unified-5h-reset"])
+
+	response := BuildHarnessUsageResponse(userId, 0)
+	require.NotNil(t, response.FiveHour)
+	require.NotNil(t, response.FiveHour.ResetsAt)
+	assert.EqualValues(t, now-600+model.SubscriptionLimitWindow5h, *response.FiveHour.ResetsAt)
+}
+
 func TestHarnessUsageCodexOverageInUse(t *testing.T) {
 	now := common.GetTimestamp()
 	userId := 980009
@@ -424,8 +455,8 @@ func TestHarnessUsageResponseUsesPercentages(t *testing.T) {
 	require.NotNil(t, response.SevenDay)
 	assert.InDelta(t, 25, response.FiveHour.Utilization, 0.001)
 	assert.InDelta(t, 25, response.SevenDay.Utilization, 0.001)
-	require.NotNil(t, response.FiveHour.ResetsAt)
-	assert.EqualValues(t, now-100+model.SubscriptionLimitWindow5h, *response.FiveHour.ResetsAt)
+	assert.Nil(t, response.FiveHour.ResetsAt, "a window with room left has no fixed reset to promise")
+	assert.Nil(t, response.SevenDay.ResetsAt)
 	require.NotNil(t, response.ExtraUsage)
 	assert.True(t, response.ExtraUsage.IsEnabled)
 }
@@ -493,6 +524,7 @@ func TestHarnessUsageResponsePerModelFields(t *testing.T) {
 	require.NotNil(t, response)
 	require.NotNil(t, response.SevenDaySonnet)
 	assert.InDelta(t, 50, response.SevenDaySonnet.Utilization, 0.001)
+	assert.Nil(t, response.SevenDaySonnet.ResetsAt, "a window with room left has no fixed reset to promise")
 	assert.Nil(t, response.SevenDayOpus, "a 5h per-model cap has no 7d field to live in")
 	require.NotNil(t, response.ExtraUsage)
 	assert.False(t, response.ExtraUsage.IsEnabled, "an empty wallet means overage is unavailable")
