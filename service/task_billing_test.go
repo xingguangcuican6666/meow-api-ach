@@ -54,6 +54,7 @@ func TestMain(m *testing.M) {
 		&model.Midjourney{},
 		&model.TopUp{},
 		&model.UserSubscription{},
+		&model.SubscriptionPlan{},
 		&model.SystemTask{},
 		&model.SystemTaskLock{},
 	); err != nil {

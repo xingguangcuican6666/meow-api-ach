@@ -54,6 +54,7 @@ export function getPlanFormSchema(t: TFunction) {
     sort_order: z.coerce.number(),
     allow_balance_pay: z.boolean(),
     allow_wallet_overflow: z.boolean(),
+    report_usage_to_harness: z.boolean(),
     max_purchase_per_user: z.coerce.number().min(0),
     total_amount: z.coerce.number().min(0),
     // Whitelist of models this plan's quota may be spent on; empty = all models.
@@ -82,6 +83,7 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   sort_order: 0,
   allow_balance_pay: true,
   allow_wallet_overflow: true,
+  report_usage_to_harness: false,
   max_purchase_per_user: 0,
   total_amount: 0,
   allowed_models: [],
@@ -107,6 +109,7 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     sort_order: Number(plan.sort_order || 0),
     allow_balance_pay: plan.allow_balance_pay !== false,
     allow_wallet_overflow: plan.allow_wallet_overflow !== false,
+    report_usage_to_harness: plan.report_usage_to_harness === true,
     max_purchase_per_user: Number(plan.max_purchase_per_user || 0),
     total_amount: quotaUnitsToDollars(Number(plan.total_amount || 0)),
     allowed_models: plan.allowed_models || [],

@@ -49,6 +49,8 @@ const defaultOperationsSettings: OperationsSettings = {
   'data_capture_setting.enabled': false,
   'data_capture_setting.max_body_kb': 512,
   'data_capture_setting.dir': '',
+  'harness_usage_setting.enabled': false,
+  'harness_usage_setting.codex_limit_id': 'codex',
   'performance_setting.disk_cache_enabled': false,
   'performance_setting.disk_cache_threshold_mb': 10,
   'performance_setting.disk_cache_max_size_mb': 1024,

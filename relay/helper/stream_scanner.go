@@ -172,6 +172,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 	scanner.Split(bufio.ScanLines)
 	copyCodexSSEHeaders(c, resp)
+	// Write the quota snapshot before any header can be flushed: SetEventStreamHeaders
+	// and the ping goroutine both start after this point.
+	service.WriteHarnessUsageHeaders(c)
 	SetEventStreamHeaders(c)
 
 	ctx = context.WithValue(ctx, "stop_chan", stopChan)

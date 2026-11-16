@@ -82,4 +82,10 @@ const (
 	ContextKeyTokenAuditParams ContextKey = "token_audit_params"
 	// ContextKeyTokenAuditSucceeded disambiguates token responses that exceed the audit buffer.
 	ContextKeyTokenAuditSucceeded ContextKey = "token_audit_succeeded"
+
+	// ContextKeyHarnessUsageHeaders holds the pre-request snapshot of the
+	// subscription quota headers reported to Claude Code / Codex CLI. It is
+	// computed once before the upstream call and written verbatim at response
+	// time, because settlement happens after the body is already sent.
+	ContextKeyHarnessUsageHeaders ContextKey = "harness_usage_headers"
 )

@@ -58,6 +58,11 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/oauth/telegram/bind/:flow_token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.TelegramLegacyAuth)
 		// Standard OAuth providers (GitHub, Discord, OIDC, LinuxDO, Telegram) - unified route
 		apiRouter.GET("/oauth/:provider", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), controller.HandleOAuth)
+		// Claude Code's /usage page reads subscription quota here, so this path
+		// must never fall through to the :provider wildcard above and be treated
+		// as an OAuth provider name. Authenticated with a sk- relay key, the same
+		// credential the harness already sends to /v1/messages.
+		apiRouter.GET("/oauth/usage", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TokenAuth(), controller.GetHarnessUsage)
 		apiRouter.GET("/ratio_config", middleware.CriticalRateLimit(), controller.GetRatioConfig)
 
 		apiRouter.POST("/stripe/webhook", anonymousRequestBodyLimit, controller.StripeWebhook)

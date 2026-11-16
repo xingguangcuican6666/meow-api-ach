@@ -32,6 +32,11 @@ func ShouldCopyUpstreamHeader(c *gin.Context, k string, v []string) bool {
 	if strings.EqualFold(k, "Content-Length") {
 		return false
 	}
+	// Upstream quota headers describe the upstream account, not this one. The
+	// harness usage snapshot owns that family, so upstream values never leak.
+	if IsUpstreamUsageLimitHeader(k) {
+		return false
+	}
 	if strings.EqualFold(k, common.RequestIdKey) {
 		if c != nil && len(v) > 0 {
 			c.Set(common.UpstreamRequestIdKey, v[0])
@@ -60,6 +65,10 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 			c.Writer.Header().Set(k, v[0])
 		}
 	}
+
+	// Our quota snapshot wins over anything upstream sent, and must be written
+	// before WriteHeader freezes the header map.
+	WriteHarnessUsageHeaders(c)
 
 	// set Content-Length header manually BEFORE calling WriteHeader
 	c.Writer.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))

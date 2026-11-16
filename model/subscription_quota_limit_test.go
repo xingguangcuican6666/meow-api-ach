@@ -741,6 +741,7 @@ func runSubscriptionLimitMigration(t *testing.T, db *gorm.DB, dialect common.Dat
 	// ---- the new columns exist and hold JSON, the old data is intact ----
 	assert.True(t, db.Migrator().HasColumn(&SubscriptionPlan{}, "quota_limits"))
 	assert.True(t, db.Migrator().HasColumn(&SubscriptionPlan{}, "allowed_models"))
+	assert.True(t, db.Migrator().HasColumn(&SubscriptionPlan{}, "report_usage_to_harness"))
 	assert.True(t, db.Migrator().HasColumn(&UserSubscription{}, "quota_limit_states"))
 	assert.True(t, db.Migrator().HasColumn(&SubscriptionPreConsumeRecord{}, "limit_refs"))
 
@@ -752,6 +753,7 @@ func runSubscriptionLimitMigration(t *testing.T, db *gorm.DB, dialect common.Dat
 	assert.Nil(t, legacyPlan.QuotaLimits, "an upgraded row must read as having no limits")
 	assert.Nil(t, legacyPlan.AllowedModels, "an upgraded row must read as covering every model")
 	assert.True(t, legacyPlan.AllowsModel("anything"), "no whitelist means every model may spend the plan")
+	assert.False(t, legacyPlan.ReportsUsageToHarness(), "an upgraded row must not start reporting usage")
 
 	var legacySub UserSubscription
 	require.NoError(t, db.Where("id = ?", 7702).First(&legacySub).Error)
@@ -836,6 +838,7 @@ func runSubscriptionLimitMigration(t *testing.T, db *gorm.DB, dialect common.Dat
 	require.NoError(t, fresh.AutoMigrate(&SubscriptionPlan{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}))
 	assert.True(t, fresh.Migrator().HasColumn(&SubscriptionPlan{}, "quota_limits"))
 	assert.True(t, fresh.Migrator().HasColumn(&SubscriptionPlan{}, "allowed_models"))
+	assert.True(t, fresh.Migrator().HasColumn(&SubscriptionPlan{}, "report_usage_to_harness"))
 	assert.True(t, fresh.Migrator().HasColumn(&UserSubscription{}, "quota_limit_states"))
 	assert.True(t, fresh.Migrator().HasColumn(&SubscriptionPreConsumeRecord{}, "limit_refs"))
 }

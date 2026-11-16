@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { DataCaptureSection } from '../general/data-capture-section'
+import { HarnessUsageSection } from '../general/harness-usage-section'
 import { SystemBehaviorSection } from '../general/system-behavior-section'
 import { EmailSettingsSection } from '../integrations/email-settings-section'
 import { MonitoringSettingsSection } from '../integrations/monitoring-settings-section'
@@ -37,8 +38,7 @@ const OPERATIONS_SECTIONS = [
           DefaultCollapseSidebar: settings.DefaultCollapseSidebar,
           DemoSiteEnabled: settings.DemoSiteEnabled,
           SelfUseModeEnabled: settings.SelfUseModeEnabled,
-          SanitizeUpstreamErrorEnabled:
-            settings.SanitizeUpstreamErrorEnabled,
+          SanitizeUpstreamErrorEnabled: settings.SanitizeUpstreamErrorEnabled,
           UpstreamPrivacyProtectionEnabled:
             settings.UpstreamPrivacyProtectionEnabled,
         }}
@@ -118,6 +118,20 @@ const OPERATIONS_SECTIONS = [
             settings['data_capture_setting.max_body_kb'] ?? 512,
           'data_capture_setting.dir':
             settings['data_capture_setting.dir'] ?? '',
+        }}
+      />
+    ),
+  },
+  {
+    id: 'harness-usage',
+    titleKey: 'Harness Usage Headers',
+    build: (settings: OperationsSettings) => (
+      <HarnessUsageSection
+        defaultValues={{
+          'harness_usage_setting.enabled':
+            settings['harness_usage_setting.enabled'] ?? false,
+          'harness_usage_setting.codex_limit_id':
+            settings['harness_usage_setting.codex_limit_id'] ?? 'codex',
         }}
       />
     ),
