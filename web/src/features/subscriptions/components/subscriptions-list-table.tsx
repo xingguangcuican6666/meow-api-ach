@@ -19,7 +19,8 @@ Original project: https://github.com/QuantumNous/new-api
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import { useMemo } from 'react'
+import type { OnChangeFn, SortingState } from '@tanstack/react-table'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { DataTablePage, useDataTable } from '@/components/data-table'
@@ -27,13 +28,32 @@ import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { createServerError } from '@/lib/server-error-message'
 
-import { listAllSubscriptions } from '../api'
-import type { SubscriptionListItem } from '../types'
+import { getAdminPlans, listAllSubscriptions } from '../api'
+import type {
+  SubscriptionListItem,
+  SubscriptionSortBy,
+  SubscriptionSortOrder,
+} from '../types'
 import { SubscriptionsListBulkActions } from './subscriptions-list-bulk-actions'
 import { useSubscriptionsListColumns } from './subscriptions-list-columns'
 import { useSubscriptions } from './subscriptions-provider'
 
 const route = getRouteApi('/_authenticated/subscriptions/$section')
+
+/**
+ * Column ids that the server can order by. The mapping is not identity-based:
+ * `user` sorts by user_id and `usage` by amount_used, because those columns
+ * render values derived from those fields.
+ */
+const SUBSCRIPTION_SORT_COLUMNS: Record<string, SubscriptionSortBy> = {
+  id: 'id',
+  user: 'user_id',
+  plan: 'plan_id',
+  status: 'status',
+  usage: 'amount_used',
+  end_time: 'end_time',
+  next_reset_time: 'next_reset_time',
+}
 
 /**
  * Cross-user subscription list. This is what makes bulk management possible:
@@ -45,6 +65,7 @@ export function SubscriptionsListTable() {
   const columns = useSubscriptionsListColumns()
   const { refreshTrigger } = useSubscriptions()
   const isMobile = useMediaQuery('(max-width: 640px)')
+  const [sorting, setSorting] = useState<SortingState>([])
 
   const {
     globalFilter,
@@ -66,6 +87,7 @@ export function SubscriptionsListTable() {
     globalFilter: { enabled: true, key: 'sFilter' },
     columnFilters: [
       { columnId: 'status', searchKey: 'sStatus', type: 'array' },
+      { columnId: 'plan', searchKey: 'sPlan', type: 'string' },
     ],
   })
 
@@ -74,6 +96,44 @@ export function SubscriptionsListTable() {
       | string[]
       | undefined) ?? []
   const statusFilterValue = statusFilter[0] ?? ''
+  const planFilterValue =
+    (columnFilters.find((filter) => filter.id === 'plan')?.value as
+      | string
+      | undefined) ?? ''
+
+  const sortParams = useMemo(() => {
+    const activeSort = sorting[0]
+    if (!activeSort) return {}
+    const sortBy = SUBSCRIPTION_SORT_COLUMNS[activeSort.id]
+    if (!sortBy) return {}
+    return {
+      sort_by: sortBy,
+      sort_order: (activeSort.desc ? 'desc' : 'asc') as SubscriptionSortOrder,
+    }
+  }, [sorting])
+
+  const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
+    setSorting(updater)
+    if (pagination.pageIndex > 0) {
+      onPaginationChange({ ...pagination, pageIndex: 0 })
+    }
+  }
+
+  // The plan filter is a Combobox of plan titles, but the table filter state
+  // stores the plan id so the query needs no title lookup.
+  const { data: plansData } = useQuery({
+    queryKey: ['admin-subscription-plans'],
+    queryFn: getAdminPlans,
+    staleTime: 60_000,
+  })
+  const planFilterOptions = useMemo(
+    () =>
+      (plansData?.data ?? []).map((record) => ({
+        label: record.plan.title || `#${record.plan.id}`,
+        value: String(record.plan.id),
+      })),
+    [plansData]
+  )
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [
@@ -82,6 +142,8 @@ export function SubscriptionsListTable() {
       pagination.pageSize,
       globalFilter,
       statusFilterValue,
+      planFilterValue,
+      sortParams,
       refreshTrigger,
     ],
     queryFn: async () => {
@@ -90,6 +152,8 @@ export function SubscriptionsListTable() {
         page_size: pagination.pageSize,
         keyword: globalFilter?.trim() || undefined,
         status: statusFilterValue || undefined,
+        plan_id: planFilterValue ? Number(planFilterValue) : undefined,
+        ...sortParams,
       })
       if (!result.success) {
         throw createServerError(result, t('Failed to load subscriptions'))
@@ -112,11 +176,14 @@ export function SubscriptionsListTable() {
     columnFilters,
     globalFilter,
     pagination,
+    sorting,
     onPaginationChange,
     onGlobalFilterChange,
     onColumnFiltersChange,
+    onSortingChange: handleSortingChange,
     manualPagination: true,
     manualFiltering: true,
+    manualSorting: true,
     totalCount: data?.total || 0,
     ensurePageInRange,
   })
@@ -146,6 +213,12 @@ export function SubscriptionsListTable() {
               { label: t('Expired'), value: 'expired' },
               { label: t('Invalidated'), value: 'cancelled' },
             ],
+          },
+          {
+            columnId: 'plan',
+            title: t('Plan'),
+            singleSelect: true,
+            options: planFilterOptions,
           },
         ],
       }}

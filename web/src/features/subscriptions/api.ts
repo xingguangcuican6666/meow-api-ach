@@ -22,11 +22,18 @@ import type {
   ApiResponse,
   BatchGrantSubscriptionsRequest,
   BatchResetSubscriptionsRequest,
+  GrantSubscriptionResetCardsRequest,
+  ListSubscriptionResetCardsParams,
   ListSubscriptionsParams,
   ListSubscriptionsResponse,
   PlanRecord,
   PlanPayload,
+  RedeemSubscriptionResetCardRequest,
   SubscriptionBatchResult,
+  SubscriptionResetCard,
+  SubscriptionResetCardGrantResult,
+  SubscriptionResetCardListItem,
+  SubscriptionResetCardUseResult,
   UserSubscriptionRecord,
   CreateUserSubscriptionRequest,
   ResetUserSubscriptionsRequest,
@@ -190,6 +197,69 @@ export async function batchDeleteSubscriptions(
   const res = await api.post('/api/subscription/admin/subscriptions/delete', {
     ids,
   })
+  return res.data
+}
+
+// ============================================================================
+// Subscription Reset Cards
+// ============================================================================
+
+/** List reset cards across users (root only). */
+export async function listSubscriptionResetCards(
+  params: ListSubscriptionResetCardsParams = {}
+): Promise<
+  ApiResponse<{
+    page: number
+    page_size: number
+    total: number
+    items: SubscriptionResetCardListItem[]
+  }>
+> {
+  const res = await api.get('/api/subscription/reset_cards/admin', { params })
+  return res.data
+}
+
+/** Mint `count` cards per user, all carrying the same configuration (root only). */
+export async function grantSubscriptionResetCards(
+  data: GrantSubscriptionResetCardsRequest
+): Promise<ApiResponse<SubscriptionResetCardGrantResult>> {
+  const res = await api.post('/api/subscription/reset_cards/admin/grant', data)
+  return res.data
+}
+
+/** Disable unused cards; a spent card keeps its redemption record. */
+export async function batchInvalidateSubscriptionResetCards(
+  ids: number[]
+): Promise<ApiResponse<SubscriptionBatchResult>> {
+  const res = await api.post('/api/subscription/reset_cards/admin/invalidate', {
+    ids,
+  })
+  return res.data
+}
+
+/** Delete cards permanently. */
+export async function batchDeleteSubscriptionResetCards(
+  ids: number[]
+): Promise<ApiResponse<SubscriptionBatchResult>> {
+  const res = await api.post('/api/subscription/reset_cards/admin/delete', {
+    ids,
+  })
+  return res.data
+}
+
+/** The caller's own cards. */
+export async function getSelfSubscriptionResetCards(): Promise<
+  ApiResponse<SubscriptionResetCard[]>
+> {
+  const res = await api.get('/api/subscription/reset_cards')
+  return res.data
+}
+
+/** Redeem one of the caller's own cards by id or by key. */
+export async function redeemSubscriptionResetCard(
+  data: RedeemSubscriptionResetCardRequest
+): Promise<ApiResponse<SubscriptionResetCardUseResult>> {
+  const res = await api.post('/api/subscription/reset_cards/redeem', data)
   return res.data
 }
 

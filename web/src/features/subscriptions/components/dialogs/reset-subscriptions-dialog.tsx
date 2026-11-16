@@ -21,32 +21,36 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { Switch } from '@/components/ui/switch'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import { resetPlanSubscriptions } from '../../api'
+import {
+  DEFAULT_SUBSCRIPTION_RESET_SCOPE,
+  type SubscriptionResetScopeValue,
+} from '../../lib/reset-scope'
+import { SubscriptionResetScopeFields } from '../subscription-reset-scope-fields'
 import { useSubscriptions } from '../subscriptions-provider'
 
 export function ResetSubscriptionsDialog() {
   const { t } = useTranslation()
   const { open, setOpen, currentRow, triggerRefresh } = useSubscriptions()
-  const [advanceResetTime, setAdvanceResetTime] = useState(true)
+  const [resetScope, setResetScope] = useState<SubscriptionResetScopeValue>(
+    DEFAULT_SUBSCRIPTION_RESET_SCOPE
+  )
   const [resetting, setResetting] = useState(false)
   const isOpen = open === 'reset-subscriptions'
   const plan = currentRow?.plan
   const planLabel = plan?.title || (plan?.id ? `#${plan.id}` : '-')
 
   useEffect(() => {
-    if (isOpen) setAdvanceResetTime(true)
+    if (isOpen) setResetScope(DEFAULT_SUBSCRIPTION_RESET_SCOPE)
   }, [isOpen])
 
   const handleConfirm = async () => {
     if (!plan?.id) return
     setResetting(true)
     try {
-      const res = await resetPlanSubscriptions(plan.id, {
-        advance_reset_time: advanceResetTime,
-      })
+      const res = await resetPlanSubscriptions(plan.id, { ...resetScope })
       if (res.success) {
         toast.success(
           t('Reset {{count}} active subscriptions', {
@@ -78,14 +82,11 @@ export function ResetSubscriptionsDialog() {
       disabled={!plan?.id}
       isLoading={resetting}
     >
-      <label className='flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm'>
-        <span>{t('Advance next reset time')}</span>
-        <Switch
-          checked={advanceResetTime}
-          onCheckedChange={(checked) => setAdvanceResetTime(!!checked)}
-          aria-label={t('Advance next reset time')}
-        />
-      </label>
+      <SubscriptionResetScopeFields
+        value={resetScope}
+        onChange={setResetScope}
+        disabled={resetting}
+      />
     </ConfirmDialog>
   )
 }

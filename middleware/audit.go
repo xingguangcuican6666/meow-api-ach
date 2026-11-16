@@ -94,6 +94,11 @@ var auditRouteActions = map[string]string{
 	"PUT /api/subscription/admin/plans/:id": "subscription.plan_update",
 	"POST /api/subscription/admin/bind":     "subscription.bind",
 
+	// 订阅重置卡（root）
+	"POST /api/subscription/reset_cards/admin/grant":      "subscription.reset_card_grant",
+	"POST /api/subscription/reset_cards/admin/invalidate": "subscription.reset_card_invalidate",
+	"POST /api/subscription/reset_cards/admin/delete":     "subscription.reset_card_delete",
+
 	// 日志
 	"POST /api/system-task/log-cleanup": "log.cleanup_start",
 }

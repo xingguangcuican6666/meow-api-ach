@@ -446,8 +446,12 @@ type AdminCreateUserSubscriptionRequest struct {
 }
 
 type AdminResetSubscriptionRequest struct {
-	PlanId           int   `json:"plan_id"`
-	AdvanceResetTime *bool `json:"advance_reset_time"`
+	PlanId            int      `json:"plan_id"`
+	AdvanceResetTime  *bool    `json:"advance_reset_time"`
+	ResetAmountUsed   *bool    `json:"reset_amount_used"`
+	ResetCycleLimits  *bool    `json:"reset_cycle_limits"`
+	ResetWindowLimits *bool    `json:"reset_window_limits"`
+	LimitKeys         []string `json:"limit_keys"`
 }
 
 func resolveAdvanceResetTime(value *bool) bool {
@@ -455,6 +459,38 @@ func resolveAdvanceResetTime(value *bool) bool {
 		return true
 	}
 	return *value
+}
+
+// resolveSubscriptionResetScope builds the reset scope from an admin request.
+// Every switch defaults to the historical behavior, so an old client that sends
+// only advance_reset_time keeps resetting exactly what it used to.
+func resolveSubscriptionResetScope(req *AdminResetSubscriptionRequest) model.SubscriptionResetScope {
+	scope := model.DefaultSubscriptionResetScope(resolveAdvanceResetTime(req.AdvanceResetTime))
+	if req.ResetAmountUsed != nil {
+		scope.ResetAmountUsed = *req.ResetAmountUsed
+	}
+	if req.ResetCycleLimits != nil {
+		scope.ResetCycleLimits = *req.ResetCycleLimits
+	}
+	if req.ResetWindowLimits != nil {
+		scope.ResetWindowLimits = *req.ResetWindowLimits
+	}
+	scope.LimitKeys = req.LimitKeys
+	return scope.Normalize()
+}
+
+// subscriptionResetScopeAudit renders the scope for audit and log entries.
+func subscriptionResetScopeAudit(scope model.SubscriptionResetScope) map[string]any {
+	params := map[string]any{
+		"advance_reset_time":  scope.AdvanceResetTime,
+		"reset_amount_used":   scope.ResetAmountUsed,
+		"reset_cycle_limits":  scope.ResetCycleLimits,
+		"reset_window_limits": scope.ResetWindowLimits,
+	}
+	if len(scope.LimitKeys) > 0 {
+		params["limit_keys"] = scope.LimitKeys
+	}
+	return params
 }
 
 func recordSubscriptionResetUserLogs(c *gin.Context, result *model.SubscriptionResetResult, adminInfo *model.AuditAdminInfo) {
@@ -510,21 +546,28 @@ func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	advanceResetTime := resolveAdvanceResetTime(req.AdvanceResetTime)
-	result, err := model.AdminResetUserSubscriptionsByPlan(userId, req.PlanId, advanceResetTime)
+	scope := resolveSubscriptionResetScope(&req)
+	result, err := model.AdminResetUserSubscriptionsByPlan(userId, req.PlanId, scope)
 	if err != nil {
+		if errors.Is(err, model.ErrSubscriptionResetScopeEmpty) {
+			common.ApiErrorMsg(c, "至少需要选择一项重置内容")
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}
 	recordSubscriptionResetUserLogs(c, result, auditOperatorInfo(c))
-	recordManageAuditFor(c, userId, "subscription.user_plan_reset", map[string]any{
-		"target_user_id":     userId,
-		"plan_id":            result.PlanId,
-		"plan_title":         result.PlanTitle,
-		"reset_count":        result.ResetCount,
-		"user_count":         result.UserCount,
-		"advance_reset_time": result.AdvanceResetTime,
-	})
+	auditParams := map[string]any{
+		"target_user_id": userId,
+		"plan_id":        result.PlanId,
+		"plan_title":     result.PlanTitle,
+		"reset_count":    result.ResetCount,
+		"user_count":     result.UserCount,
+	}
+	for key, value := range subscriptionResetScopeAudit(scope) {
+		auditParams[key] = value
+	}
+	recordManageAuditFor(c, userId, "subscription.user_plan_reset", auditParams)
 	common.ApiSuccess(c, result)
 }
 
@@ -539,22 +582,30 @@ func AdminResetPlanSubscriptions(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	advanceResetTime := resolveAdvanceResetTime(req.AdvanceResetTime)
-	result, err := model.AdminResetPlanSubscriptions(planId, advanceResetTime)
+	scope := resolveSubscriptionResetScope(&req)
+	result, err := model.AdminResetPlanSubscriptions(planId, scope)
 	if err != nil {
+		if errors.Is(err, model.ErrSubscriptionResetScopeEmpty) {
+			common.ApiErrorMsg(c, "至少需要选择一项重置内容")
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}
 	recordSubscriptionResetUserLogs(c, result, auditOperatorInfo(c))
-	common.SysLog(fmt.Sprintf("admin reset subscription plan %d quota: reset_count=%d user_count=%d advance_reset_time=%t",
-		result.PlanId, result.ResetCount, result.UserCount, result.AdvanceResetTime))
-	recordManageAudit(c, "subscription.plan_reset", map[string]any{
-		"plan_id":            result.PlanId,
-		"plan_title":         result.PlanTitle,
-		"reset_count":        result.ResetCount,
-		"user_count":         result.UserCount,
-		"advance_reset_time": result.AdvanceResetTime,
-	})
+	common.SysLog(fmt.Sprintf("admin reset subscription plan %d quota: reset_count=%d user_count=%d advance_reset_time=%t reset_amount_used=%t reset_cycle_limits=%t reset_window_limits=%t",
+		result.PlanId, result.ResetCount, result.UserCount, result.AdvanceResetTime,
+		result.ResetAmountUsed, result.ResetCycleLimits, result.ResetWindowLimits))
+	auditParams := map[string]any{
+		"plan_id":     result.PlanId,
+		"plan_title":  result.PlanTitle,
+		"reset_count": result.ResetCount,
+		"user_count":  result.UserCount,
+	}
+	for key, value := range subscriptionResetScopeAudit(scope) {
+		auditParams[key] = value
+	}
+	recordManageAudit(c, "subscription.plan_reset", auditParams)
 	common.ApiSuccess(c, result)
 }
 
@@ -609,6 +660,8 @@ func AdminListSubscriptions(c *gin.Context) {
 		Status:     strings.TrimSpace(c.Query("status")),
 		Keyword:    strings.TrimSpace(c.Query("keyword")),
 		ActiveOnly: strings.EqualFold(strings.TrimSpace(c.Query("active_only")), "true"),
+		SortBy:     strings.TrimSpace(c.Query("sort_by")),
+		SortOrder:  strings.TrimSpace(c.Query("sort_order")),
 	}
 	if userId, err := strconv.Atoi(c.Query("user_id")); err == nil {
 		filter.UserId = userId
@@ -638,8 +691,12 @@ type AdminBatchGrantSubscriptionRequest struct {
 }
 
 type AdminBatchResetSubscriptionRequest struct {
-	Ids              []int `json:"ids"`
-	AdvanceResetTime *bool `json:"advance_reset_time"`
+	Ids               []int    `json:"ids"`
+	AdvanceResetTime  *bool    `json:"advance_reset_time"`
+	ResetAmountUsed   *bool    `json:"reset_amount_used"`
+	ResetCycleLimits  *bool    `json:"reset_cycle_limits"`
+	ResetWindowLimits *bool    `json:"reset_window_limits"`
+	LimitKeys         []string `json:"limit_keys"`
 }
 
 // subscriptionBatchAuditMaxIds bounds how many target ids an audit entry lists.
@@ -703,15 +760,24 @@ func AdminBatchResetSubscriptions(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	advance := resolveAdvanceResetTime(req.AdvanceResetTime)
-	result, err := model.BatchResetUserSubscriptions(req.Ids, advance)
+	resetReq := AdminResetSubscriptionRequest{
+		AdvanceResetTime:  req.AdvanceResetTime,
+		ResetAmountUsed:   req.ResetAmountUsed,
+		ResetCycleLimits:  req.ResetCycleLimits,
+		ResetWindowLimits: req.ResetWindowLimits,
+		LimitKeys:         req.LimitKeys,
+	}
+	scope := resolveSubscriptionResetScope(&resetReq)
+	result, err := model.BatchResetUserSubscriptions(req.Ids, scope)
 	if err != nil {
+		if errors.Is(err, model.ErrSubscriptionResetScopeEmpty) {
+			common.ApiErrorMsg(c, "至少需要选择一项重置内容")
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}
-	respondSubscriptionBatch(c, "subscription.batch_reset", result, req.Ids, map[string]any{
-		"advance_reset_time": advance,
-	})
+	respondSubscriptionBatch(c, "subscription.batch_reset", result, req.Ids, subscriptionResetScopeAudit(scope))
 }
 
 // AdminBatchGrantSubscription grants one plan to many users. It carries the same

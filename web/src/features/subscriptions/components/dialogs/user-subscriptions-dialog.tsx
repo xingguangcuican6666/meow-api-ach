@@ -47,7 +47,6 @@ import {
   SheetTitle,
   SheetDescription,
 } from '@/components/ui/sheet'
-import { Switch } from '@/components/ui/switch'
 import { formatQuota } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
 
@@ -60,8 +59,13 @@ import {
   resetUserSubscriptionsByPlan,
 } from '../../api'
 import { formatQuotaLimitLabel, formatTimestamp } from '../../lib'
+import {
+  DEFAULT_SUBSCRIPTION_RESET_SCOPE,
+  type SubscriptionResetScopeValue,
+} from '../../lib/reset-scope'
 import type { PlanRecord, UserSubscriptionRecord } from '../../types'
 import { AllowedModelsLabel } from '../allowed-models-label'
+import { SubscriptionResetScopeFields } from '../subscription-reset-scope-fields'
 
 interface Props {
   open: boolean
@@ -113,7 +117,9 @@ export function UserSubscriptionsDialog(props: Props) {
   const [subs, setSubs] = useState<UserSubscriptionRecord[]>([])
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
   const [resetting, setResetting] = useState(false)
-  const [advanceResetTime, setAdvanceResetTime] = useState(true)
+  const [resetScope, setResetScope] = useState<SubscriptionResetScopeValue>(
+    DEFAULT_SUBSCRIPTION_RESET_SCOPE
+  )
   const [resetAction, setResetAction] = useState<{
     planId: number
     planTitle: string
@@ -223,7 +229,7 @@ export function UserSubscriptionsDialog(props: Props) {
     try {
       const res = await resetUserSubscriptionsByPlan(props.user.id, {
         plan_id: resetAction.planId,
-        advance_reset_time: advanceResetTime,
+        ...resetScope,
       })
       if (res.success) {
         toast.success(
@@ -387,7 +393,7 @@ export function UserSubscriptionsDialog(props: Props) {
                         <DropdownMenuItem
                           disabled={!isActive}
                           onClick={() => {
-                            setAdvanceResetTime(true)
+                            setResetScope(DEFAULT_SUBSCRIPTION_RESET_SCOPE)
                             setResetAction({
                               planId: sub.plan_id,
                               planTitle:
@@ -475,17 +481,11 @@ export function UserSubscriptionsDialog(props: Props) {
           handleConfirm={handleResetConfirm}
           isLoading={resetting}
         >
-          <label className='flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm'>
-            <span>{t('Advance next reset time')}</span>
-            {/* The wrapping <label> already names this switch; an extra
-
-                aria-label would concatenate into a doubled accessible name. */}
-
-            <Switch
-              checked={advanceResetTime}
-              onCheckedChange={(checked) => setAdvanceResetTime(!!checked)}
-            />
-          </label>
+          <SubscriptionResetScopeFields
+            value={resetScope}
+            onChange={setResetScope}
+            disabled={resetting}
+          />
         </ConfirmDialog>
       )}
     </>

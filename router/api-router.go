@@ -177,6 +177,10 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.POST("/stripe/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestStripePay)
 			subscriptionRoute.POST("/creem/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestCreemPay)
 			subscriptionRoute.POST("/waffo-pancake/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestWaffoPancakePay)
+			// Reset cards: the holder lists their own cards and redeems one.
+			// Redemption is rate-limited like the other critical writes.
+			subscriptionRoute.GET("/reset_cards", controller.GetSelfSubscriptionResetCards)
+			subscriptionRoute.POST("/reset_cards/redeem", middleware.CriticalRateLimit(), controller.RedeemSubscriptionResetCard)
 		}
 		subscriptionAdminRoute := apiRouter.Group("/subscription/admin")
 		subscriptionAdminRoute.Use(middleware.AdminAuth())
@@ -209,6 +213,18 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/return", controller.SubscriptionEpayReturn)
 		apiRouter.POST("/subscription/epay/return", anonymousRequestBodyLimit, controller.SubscriptionEpayReturn)
+
+		// Subscription reset cards (root only). A card resets usage counters on
+		// demand, which is equivalent to handing out quota, so issuing and
+		// managing them is restricted to root rather than delegated to admins.
+		subscriptionResetCardRoute := apiRouter.Group("/subscription/reset_cards")
+		subscriptionResetCardRoute.Use(middleware.RootAuth())
+		{
+			subscriptionResetCardRoute.GET("/admin", controller.AdminListSubscriptionResetCards)
+			subscriptionResetCardRoute.POST("/admin/grant", controller.AdminGrantSubscriptionResetCards)
+			subscriptionResetCardRoute.POST("/admin/invalidate", controller.AdminBatchInvalidateSubscriptionResetCards)
+			subscriptionResetCardRoute.POST("/admin/delete", controller.AdminBatchDeleteSubscriptionResetCards)
+		}
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{

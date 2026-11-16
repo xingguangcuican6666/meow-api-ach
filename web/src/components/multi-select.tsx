@@ -88,6 +88,11 @@ interface MultiSelectProps {
    * instead of being inert. The remove (×) button keeps its own behaviour.
    */
   copyChipOnClick?: boolean
+  /**
+   * Notified with the current search text. Remote-search callers feed it into
+   * a query that repopulates `options`; local callers can ignore it.
+   */
+  onInputValueChange?: (value: string) => void
 }
 
 const COMMA_REGEX = /[,，\n]/
@@ -212,6 +217,7 @@ export function MultiSelect(props: MultiSelectProps) {
   )
 
   const handleInputValueChange = (value: string) => {
+    props.onInputValueChange?.(value)
     if (!props.allowCreate) {
       setInputValue(value)
       return

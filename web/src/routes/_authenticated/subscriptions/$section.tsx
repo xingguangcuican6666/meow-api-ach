@@ -31,6 +31,8 @@ const subscriptionsSearchSchema = z.object({
   sPageSize: z.number().optional().catch(20),
   sFilter: z.string().optional().catch(''),
   sStatus: z.array(z.string()).optional().catch([]),
+  sPlan: z.string().optional().catch(''),
+  sCardStatus: z.array(z.string()).optional().catch([]),
 })
 
 export const Route = createFileRoute('/_authenticated/subscriptions/$section')({
@@ -43,6 +45,16 @@ export const Route = createFileRoute('/_authenticated/subscriptions/$section')({
 
     const validSections = SUBSCRIPTIONS_SECTION_IDS as unknown as string[]
     if (!validSections.includes(params.section)) {
+      throw redirect({
+        to: '/subscriptions/$section',
+        params: { section: 'plans' },
+      })
+    }
+
+    // Reset cards are issued and managed by root only; the card endpoints are
+    // RootAuth-gated, so send other admins back to the plan catalog instead of
+    // rendering a ledger whose requests would all fail.
+    if (params.section === 'reset-cards' && auth.user.role < ROLE.SUPER_ADMIN) {
       throw redirect({
         to: '/subscriptions/$section',
         params: { section: 'plans' },

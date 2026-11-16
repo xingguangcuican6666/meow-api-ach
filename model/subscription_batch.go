@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Subscription management used to be reachable only one user at a time, from
@@ -34,6 +35,57 @@ var ErrSubscriptionBatchEmpty = errors.New("no subscription selected")
 // subscriptionBatchMax entries.
 var ErrSubscriptionBatchTooLarge = fmt.Errorf("a batch operation accepts at most %d entries", subscriptionBatchMax)
 
+// subscriptionSortColumns whitelists the columns the cross-user subscription
+// list may order by. Sorting happens on user_subscriptions alone: joining users
+// just to sort by username would multiply the query's cost for one column.
+var subscriptionSortColumns = map[string]string{
+	"id":              "id",
+	"user_id":         "user_id",
+	"plan_id":         "plan_id",
+	"status":          "status",
+	"amount_total":    "amount_total",
+	"amount_used":     "amount_used",
+	"start_time":      "start_time",
+	"end_time":        "end_time",
+	"next_reset_time": "next_reset_time",
+	"created_at":      "created_at",
+	"updated_at":      "updated_at",
+}
+
+// NewSubscriptionSortOptions normalizes an admin-supplied sort request. An
+// unknown column falls back to newest-first, which is the historical order.
+func NewSubscriptionSortOptions(sortBy string, sortOrder string) UserSortOptions {
+	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
+	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
+	if _, ok := subscriptionSortColumns[normalizedSortBy]; !ok {
+		normalizedSortBy = "id"
+		normalizedSortOrder = "desc"
+	} else if normalizedSortOrder != "asc" {
+		normalizedSortOrder = "desc"
+	}
+	return UserSortOptions{SortBy: normalizedSortBy, SortOrder: normalizedSortOrder}
+}
+
+// applySubscriptionSort orders the query by the whitelisted column and appends
+// id desc as a tiebreaker so equal values never shuffle between pages.
+func applySubscriptionSort(query *gorm.DB, sortOptions UserSortOptions) *gorm.DB {
+	columnName, ok := subscriptionSortColumns[sortOptions.SortBy]
+	if !ok {
+		columnName = "id"
+	}
+	q := query.Order(clause.OrderByColumn{
+		Column: clause.Column{Name: columnName},
+		Desc:   sortOptions.SortOrder != "asc",
+	})
+	if columnName != "id" {
+		q = q.Order(clause.OrderByColumn{
+			Column: clause.Column{Name: "id"},
+			Desc:   true,
+		})
+	}
+	return q
+}
+
 // UserSubscriptionListFilter narrows ListUserSubscriptions. Every field is
 // optional; a zero value means "do not filter on this".
 type UserSubscriptionListFilter struct {
@@ -45,6 +97,11 @@ type UserSubscriptionListFilter struct {
 	Keyword string
 	// ActiveOnly keeps subscriptions that are active and not yet past end_time.
 	ActiveOnly bool
+	// SortBy / SortOrder select the server-side ordering. They live on the
+	// filter rather than beside it so a caller that builds the struct by key
+	// keeps compiling, and NewSubscriptionSortOptions normalizes them.
+	SortBy    string
+	SortOrder string
 }
 
 // UserSubscriptionListItem is one row of the cross-user admin list. The owner and
@@ -63,8 +120,9 @@ type UserSubscriptionListItem struct {
 }
 
 // ListUserSubscriptions returns one page of subscriptions across all users, plus
-// the total matching count. Rows are ordered newest first so an administrator
-// sees what was just granted.
+// the total matching count. The order is chosen by the caller (newest first by
+// default) so the table's sortable headers work on the whole result set rather
+// than on the page that happens to be loaded.
 func ListUserSubscriptions(filter UserSubscriptionListFilter, pageInfo *common.PageInfo) ([]UserSubscriptionListItem, int64, error) {
 	if pageInfo == nil {
 		return nil, 0, errors.New("pageInfo is required")
@@ -103,8 +161,7 @@ func ListUserSubscriptions(filter UserSubscriptionListFilter, pageInfo *common.P
 	}
 
 	var subs []UserSubscription
-	if err := query.
-		Order("id desc").
+	if err := applySubscriptionSort(query, NewSubscriptionSortOptions(filter.SortBy, filter.SortOrder)).
 		Limit(pageInfo.GetPageSize()).
 		Offset(pageInfo.GetStartIdx()).
 		Find(&subs).Error; err != nil {
@@ -254,10 +311,15 @@ func BatchDeleteUserSubscriptions(ids []int) (*SubscriptionBatchResult, error) {
 }
 
 // BatchResetUserSubscriptions zeroes each subscription's usage counters. The
-// plan's reset cycle governs which counters are cleared, and advanceResetTime
-// moves the next reset forward, matching the existing per-plan reset dialog.
-func BatchResetUserSubscriptions(ids []int, advanceResetTime bool) (*SubscriptionBatchResult, error) {
+// scope selects which counters are cleared (whole-period total, cycle-following
+// limit counters, and optionally the rolling 5h/7d windows), and
+// AdvanceResetTime moves the next reset forward, matching the reset dialogs.
+func BatchResetUserSubscriptions(ids []int, scope SubscriptionResetScope) (*SubscriptionBatchResult, error) {
 	if err := validateSubscriptionBatchInput(ids); err != nil {
+		return nil, err
+	}
+	scope = scope.Normalize()
+	if err := scope.Validate(); err != nil {
 		return nil, err
 	}
 	result := &SubscriptionBatchResult{Requested: len(ids), Items: make([]SubscriptionBatchItemOutcome, 0, len(ids))}
@@ -273,7 +335,7 @@ func BatchResetUserSubscriptions(ids []int, advanceResetTime bool) (*Subscriptio
 			if err != nil {
 				return err
 			}
-			return resetUserSubscriptionTx(tx, &sub, plan, now, advanceResetTime)
+			return resetUserSubscriptionTx(tx, &sub, plan, now, scope)
 		})
 		if err != nil {
 			outcome.Message = err.Error()

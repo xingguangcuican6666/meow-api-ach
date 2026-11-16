@@ -172,7 +172,7 @@ func TestBatchResetUserSubscriptions(t *testing.T) {
 		}).Error)
 	}
 
-	result, err := BatchResetUserSubscriptions([]int{subA, subB}, false)
+	result, err := BatchResetUserSubscriptions([]int{subA, subB}, DefaultSubscriptionResetScope(false))
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.Succeeded)
 	assert.Equal(t, 0, result.Failed)
@@ -203,7 +203,7 @@ func TestSubscriptionBatchInputBounds(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSubscriptionBatchEmpty)
 	_, err = BatchDeleteUserSubscriptions([]int{})
 	assert.ErrorIs(t, err, ErrSubscriptionBatchEmpty)
-	_, err = BatchResetUserSubscriptions(nil, false)
+	_, err = BatchResetUserSubscriptions(nil, DefaultSubscriptionResetScope(false))
 	assert.ErrorIs(t, err, ErrSubscriptionBatchEmpty)
 	_, err = BatchGrantSubscriptionToUsers(nil, plan.Id)
 	assert.ErrorIs(t, err, ErrSubscriptionBatchEmpty)

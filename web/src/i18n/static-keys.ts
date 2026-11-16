@@ -615,6 +615,12 @@ export const STATIC_I18N_KEYS = [
   'Validity',
   'Actions',
 
+  // Subscription reset cards (labels resolved through constants, not literals)
+  'Reset Cards',
+  'All active subscriptions',
+  'Subscriptions of one plan',
+  'One specific subscription',
+
   // Sidebar modules
   'Chat Area',
   'Playground and chat functions',

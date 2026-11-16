@@ -27,7 +27,6 @@ import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
 import {
   Tooltip,
   TooltipContent,
@@ -41,7 +40,12 @@ import {
   batchInvalidateSubscriptions,
   batchResetSubscriptions,
 } from '../api'
+import {
+  DEFAULT_SUBSCRIPTION_RESET_SCOPE,
+  type SubscriptionResetScopeValue,
+} from '../lib/reset-scope'
 import type { SubscriptionBatchResult, SubscriptionListItem } from '../types'
+import { SubscriptionResetScopeFields } from './subscription-reset-scope-fields'
 import { useSubscriptions } from './subscriptions-provider'
 
 type DataTableBulkActionsProps = {
@@ -74,9 +78,11 @@ export function SubscriptionsListBulkActions(props: DataTableBulkActionsProps) {
   const { triggerRefresh } = useSubscriptions()
   const [pendingAction, setPendingAction] = useState<PendingAction>(null)
   const [resetTargets, setResetTargets] = useState<number[] | null>(null)
-  const [advanceResetTime, setAdvanceResetTime] = useState(true)
+  const [resetScope, setResetScope] = useState<SubscriptionResetScopeValue>(
+    DEFAULT_SUBSCRIPTION_RESET_SCOPE
+  )
   useEffect(() => {
-    if (resetTargets !== null) setAdvanceResetTime(true)
+    if (resetTargets !== null) setResetScope(DEFAULT_SUBSCRIPTION_RESET_SCOPE)
   }, [resetTargets])
   const selectedRows = props.table.getFilteredSelectedRowModel().rows
 
@@ -131,7 +137,7 @@ export function SubscriptionsListBulkActions(props: DataTableBulkActionsProps) {
     mutationFn: async (ids: number[]) => {
       const result = await batchResetSubscriptions({
         ids,
-        advance_reset_time: advanceResetTime,
+        ...resetScope,
       })
       if (!result.success) throw createServerError(result)
       return result.data as SubscriptionBatchResult
@@ -283,17 +289,11 @@ export function SubscriptionsListBulkActions(props: DataTableBulkActionsProps) {
           }
         }}
       >
-        <label className='flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm'>
-          <span>{t('Advance next reset time')}</span>
-          {/* The wrapping <label> already names this switch; an extra
-
-              aria-label would concatenate into a doubled accessible name. */}
-
-          <Switch
-            checked={advanceResetTime}
-            onCheckedChange={(checked) => setAdvanceResetTime(!!checked)}
-          />
-        </label>
+        <SubscriptionResetScopeFields
+          value={resetScope}
+          onChange={setResetScope}
+          disabled={reset.isPending}
+        />
       </ConfirmDialog>
     </>
   )

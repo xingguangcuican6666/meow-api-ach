@@ -131,6 +131,22 @@ export function auditFieldLabel(key: string, t: TFunction): string {
       return t('User Count')
     case 'advance_reset_time':
       return t('Advance next reset time')
+    case 'reset_amount_used':
+      return t('Reset total quota usage')
+    case 'reset_cycle_limits':
+      return t('Reset cycle limit counters')
+    case 'reset_window_limits':
+      return t('Reset rolling window counters')
+    case 'limit_keys':
+      return t('Limit keys')
+    case 'target_scope':
+      return t('Reset target')
+    case 'batch_id':
+      return t('Batch ID')
+    case 'user_subscription_id':
+      return t('Subscription ID')
+    case 'requested_user_ids':
+      return t('Requested user IDs')
     case 'requested':
       return t('Requested')
     case 'succeeded':
@@ -141,6 +157,10 @@ export function auditFieldLabel(key: string, t: TFunction): string {
       return t('Requested subscription IDs')
     case 'requested_subscription_ids_truncated':
       return t('Requested subscription IDs truncated')
+    case 'requested_reset_card_ids':
+      return t('Requested reset card IDs')
+    case 'requested_reset_card_ids_truncated':
+      return t('Requested reset card IDs truncated')
     case 'bindingType':
       return t('Binding Type')
     case 'from':

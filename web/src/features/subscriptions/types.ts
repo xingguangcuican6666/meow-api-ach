@@ -150,7 +150,25 @@ export interface ListSubscriptionsParams {
   plan_id?: number
   user_id?: number
   active_only?: boolean
+  /** Server-side ordering; the column whitelist is enforced by the backend. */
+  sort_by?: SubscriptionSortBy
+  sort_order?: SubscriptionSortOrder
 }
+
+export type SubscriptionSortBy =
+  | 'id'
+  | 'user_id'
+  | 'plan_id'
+  | 'status'
+  | 'amount_total'
+  | 'amount_used'
+  | 'start_time'
+  | 'end_time'
+  | 'next_reset_time'
+  | 'created_at'
+  | 'updated_at'
+
+export type SubscriptionSortOrder = 'asc' | 'desc'
 
 export interface ListSubscriptionsResponse {
   success: boolean
@@ -188,6 +206,10 @@ export interface BatchGrantSubscriptionsRequest {
 export interface BatchResetSubscriptionsRequest {
   ids: number[]
   advance_reset_time: boolean
+  reset_amount_used?: boolean
+  reset_cycle_limits?: boolean
+  reset_window_limits?: boolean
+  limit_keys?: string[]
 }
 
 // ============================================================================
@@ -235,10 +257,18 @@ export interface CreateUserSubscriptionRequest {
 export interface ResetUserSubscriptionsRequest {
   plan_id: number
   advance_reset_time: boolean
+  reset_amount_used?: boolean
+  reset_cycle_limits?: boolean
+  reset_window_limits?: boolean
+  limit_keys?: string[]
 }
 
 export interface ResetPlanSubscriptionsRequest {
   advance_reset_time: boolean
+  reset_amount_used?: boolean
+  reset_cycle_limits?: boolean
+  reset_window_limits?: boolean
+  limit_keys?: string[]
 }
 
 export interface SubscriptionResetResult {
@@ -247,6 +277,130 @@ export interface SubscriptionResetResult {
   reset_count: number
   user_count: number
   advance_reset_time: boolean
+  reset_amount_used: boolean
+  reset_cycle_limits: boolean
+  reset_window_limits: boolean
+  limit_keys?: string[]
+}
+
+// ============================================================================
+// Subscription Reset Cards
+// ============================================================================
+
+export const SUBSCRIPTION_RESET_CARD_SCOPES = [
+  'all',
+  'plan',
+  'subscription',
+] as const
+
+export type SubscriptionResetCardScope =
+  (typeof SUBSCRIPTION_RESET_CARD_SCOPES)[number]
+
+export const SUBSCRIPTION_RESET_CARD_STATUSES = [
+  'unused',
+  'used',
+  'disabled',
+] as const
+
+export type SubscriptionResetCardStatus =
+  (typeof SUBSCRIPTION_RESET_CARD_STATUSES)[number]
+
+/**
+ * A one-shot voucher that resets subscription counters. The reset selection is
+ * frozen on the card when root grants it; the target list is resolved when the
+ * holder redeems it.
+ */
+export interface SubscriptionResetCard {
+  id: number
+  user_id: number
+  name: string
+  key: string
+  status: SubscriptionResetCardStatus
+  batch_id?: string
+  target_scope: SubscriptionResetCardScope
+  plan_id?: number
+  user_subscription_id?: number
+  limit_keys?: string[]
+  reset_amount_used: boolean
+  reset_cycle_limits: boolean
+  reset_window_limits: boolean
+  advance_reset_time: boolean
+  expired_time?: number
+  used_time?: number
+  used_by_user_id?: number
+  created_time?: number
+  updated_time?: number
+}
+
+/** One row of the root card list, with the holder's username resolved. */
+export interface SubscriptionResetCardListItem {
+  card: SubscriptionResetCard
+  username: string
+}
+
+/** The reset selection shared by card grants and manual resets. */
+export interface SubscriptionResetScopePayload {
+  reset_amount_used: boolean
+  reset_cycle_limits: boolean
+  reset_window_limits: boolean
+  limit_keys?: string[]
+}
+
+export interface GrantSubscriptionResetCardsRequest extends SubscriptionResetScopePayload {
+  user_ids: number[]
+  count: number
+  name?: string
+  expired_time?: number
+  target_scope: SubscriptionResetCardScope
+  plan_id?: number
+  user_subscription_id?: number
+  advance_reset_time: boolean
+}
+
+export interface SubscriptionResetCardGrantItem {
+  user_id: number
+  ok: boolean
+  message?: string
+  card_ids?: number[]
+  keys?: string[]
+}
+
+export interface SubscriptionResetCardGrantResult {
+  requested: number
+  succeeded: number
+  failed: number
+  count: number
+  batch_id: string
+  items: SubscriptionResetCardGrantItem[]
+}
+
+export interface ListSubscriptionResetCardsParams {
+  p?: number
+  page_size?: number
+  keyword?: string
+  status?: string
+  user_id?: number
+  batch_id?: string
+}
+
+export interface RedeemSubscriptionResetCardRequest {
+  card_id?: number
+  key?: string
+}
+
+export interface SubscriptionResetCardUseResult {
+  card_id: number
+  name: string
+  target_scope: SubscriptionResetCardScope
+  plan_id?: number
+  user_subscription_id?: number
+  matched_count: number
+  reset_count: number
+  advance_reset_time: boolean
+  reset_amount_used: boolean
+  reset_cycle_limits: boolean
+  reset_window_limits: boolean
+  limit_keys?: string[]
 }
 
 // ============================================================================

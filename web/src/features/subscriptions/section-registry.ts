@@ -22,7 +22,8 @@ import { createSectionRegistry } from '@/features/system-settings/utils/section-
 /**
  * Subscription management sections. `plans` is the existing plan catalog;
  * `subscriptions` is the cross-user list an administrator uses to grant,
- * reset, cancel or delete many subscriptions at once.
+ * reset, cancel or delete many subscriptions at once; `reset-cards` is the
+ * root-only ledger of redeemable reset vouchers.
  */
 const SUBSCRIPTIONS_SECTIONS = [
   {
@@ -33,6 +34,11 @@ const SUBSCRIPTIONS_SECTIONS = [
   {
     id: 'subscriptions',
     titleKey: 'User Subscriptions',
+    build: () => null,
+  },
+  {
+    id: 'reset-cards',
+    titleKey: 'Reset Cards',
     build: () => null,
   },
 ] as const

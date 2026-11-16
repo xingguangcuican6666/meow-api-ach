@@ -136,6 +136,9 @@ export function useSubscriptionsListColumns(): ColumnDef<SubscriptionListItem>[]
         size: 180,
       },
       {
+        // An accessor is required for the header to offer sorting; the server
+        // orders by user_subscriptions.status, not by this derived label.
+        accessorFn: (row) => row.subscription.status,
         id: 'status',
         header: t('Status'),
         cell: ({ row }) => {
@@ -151,6 +154,9 @@ export function useSubscriptionsListColumns(): ColumnDef<SubscriptionListItem>[]
         size: 110,
       },
       {
+        // The server sorts by amount_used; this accessor only makes the header
+        // sortable and never orders the page client-side (manualSorting).
+        accessorFn: (row) => row.subscription.amount_used,
         id: 'usage',
         header: t('Quota Usage'),
         cell: ({ row }) => {

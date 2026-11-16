@@ -219,7 +219,7 @@ describe('cross-user subscription bulk actions', () => {
     expect(successSpy).not.toHaveBeenCalled()
   })
 
-  test('reset forwards the advance-reset switch and defaults it to on', async () => {
+  test('reset forwards the whole reset scope and defaults windows off', async () => {
     const posts = installPostStub({
       success: true,
       data: { requested: 2, succeeded: 2, failed: 0, items: [] },
@@ -234,11 +234,21 @@ describe('cross-user subscription bulk actions', () => {
       name: 'Advance next reset time',
     })
     expect(advance).toHaveAttribute('aria-checked', 'true')
+    const windows = screen.getByRole('switch', {
+      name: 'Reset rolling window counters',
+    })
+    expect(windows).toHaveAttribute('aria-checked', 'false')
     await user.click(screen.getByRole('button', { name: 'Reset' }))
 
     await waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0].url).toBe('/api/subscription/admin/subscriptions/reset')
-    expect(posts[0].body).toEqual({ ids: [11, 12], advance_reset_time: true })
+    expect(posts[0].body).toEqual({
+      ids: [11, 12],
+      advance_reset_time: true,
+      reset_amount_used: true,
+      reset_cycle_limits: true,
+      reset_window_limits: false,
+    })
   })
 
   test('an empty selection renders no toolbar, so no action can run on nothing', () => {

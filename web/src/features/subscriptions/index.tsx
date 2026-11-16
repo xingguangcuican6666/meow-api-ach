@@ -17,14 +17,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { getRouteApi, useNavigate } from '@tanstack/react-router'
-import { Info } from 'lucide-react'
-import { useCallback } from 'react'
+import { Info, Plus } from 'lucide-react'
+import { useCallback, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
+import { GrantResetCardDialog } from './components/dialogs/grant-reset-card-dialog'
+import { ResetCardsTable } from './components/reset-cards-table'
 import { SubscriptionsDialogs } from './components/subscriptions-dialogs'
 import { SubscriptionsListTable } from './components/subscriptions-list-table'
 import { SubscriptionsPrimaryButtons } from './components/subscriptions-primary-buttons'
@@ -53,9 +58,13 @@ const SECTION_META: Record<
     titleKey: 'User Subscriptions',
     tabKey: 'User Subscriptions',
   },
+  'reset-cards': {
+    titleKey: 'Reset Cards',
+    tabKey: 'Reset Cards',
+  },
 }
 
-const SECTION_IDS = ['plans', 'subscriptions'] as const
+const SECTION_IDS = ['plans', 'subscriptions', 'reset-cards'] as const
 
 function SubscriptionsContent() {
   const { t } = useTranslation()
@@ -66,6 +75,10 @@ function SubscriptionsContent() {
       ? params.section
       : SUBSCRIPTIONS_DEFAULT_SECTION
   const { complianceConfirmed } = useSubscriptions()
+  const isRoot = useAuthStore(
+    (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
+  )
+  const [grantOpen, setGrantOpen] = useState(false)
 
   const handleSectionChange = useCallback(
     (section: string) => {
@@ -81,9 +94,26 @@ function SubscriptionsContent() {
   const meta = SECTION_META[activeSection]
   // The plan catalog owns the create-plan alert and button; the cross-user list
   // has no primary action of its own, since bulk actions live in the selection
-  // toolbar that appears once rows are selected.
-  const actions =
-    activeSection === 'plans' ? <SubscriptionsPrimaryButtons /> : null
+  // toolbar that appears once rows are selected. The card ledger's only primary
+  // action is minting new cards, which is root-only.
+  let actions: ReactNode = null
+  if (activeSection === 'plans') {
+    actions = <SubscriptionsPrimaryButtons />
+  } else if (activeSection === 'reset-cards' && isRoot) {
+    actions = (
+      <Button size='sm' onClick={() => setGrantOpen(true)}>
+        <Plus className='h-4 w-4' />
+        {t('Grant reset cards')}
+      </Button>
+    )
+  }
+
+  let sectionContent: ReactNode = <ResetCardsTable />
+  if (activeSection === 'plans') {
+    sectionContent = <SubscriptionsTable />
+  } else if (activeSection === 'subscriptions') {
+    sectionContent = <SubscriptionsListTable />
+  }
 
   return (
     <>
@@ -124,18 +154,13 @@ function SubscriptionsContent() {
                 </AlertDescription>
               </Alert>
             ) : null}
-            <div className='min-h-0 flex-1'>
-              {activeSection === 'plans' ? (
-                <SubscriptionsTable />
-              ) : (
-                <SubscriptionsListTable />
-              )}
-            </div>
+            <div className='min-h-0 flex-1'>{sectionContent}</div>
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>
 
       <SubscriptionsDialogs />
+      <GrantResetCardDialog open={grantOpen} onOpenChange={setGrantOpen} />
     </>
   )
 }

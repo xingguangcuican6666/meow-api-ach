@@ -371,7 +371,7 @@ func TestResetUserSubscriptionKeepsRunningWindowCounters(t *testing.T) {
 			{Key: "cycle", Used: 150},
 		}).Error)
 
-	result, err := AdminResetUserSubscriptionsByPlan(307, plan.Id, true)
+	result, err := AdminResetUserSubscriptionsByPlan(307, plan.Id, DefaultSubscriptionResetScope(true))
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.ResetCount)
 

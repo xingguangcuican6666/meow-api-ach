@@ -30,6 +30,7 @@ import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
 import { PaymentConfirmDialog } from './components/dialogs/payment-confirm-dialog'
 import { TransferDialog } from './components/dialogs/transfer-dialog'
 import { RechargeFormCard } from './components/recharge-form-card'
+import { ResetCardsCard } from './components/reset-cards-card'
 import { SubscriptionPlansCard } from './components/subscription-plans-card'
 import { WalletStatsCard } from './components/wallet-stats-card'
 import { DEFAULT_DISCOUNT_RATE, PAYMENT_TYPES } from './constants'
@@ -338,6 +339,8 @@ export function Wallet(props: WalletProps) {
                 onPurchaseSuccess={fetchUser}
               />
             </div>
+
+            <ResetCardsCard />
 
             <AffiliateRewardsCard
               user={user}

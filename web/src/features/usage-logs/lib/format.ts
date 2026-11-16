@@ -565,6 +565,12 @@ const AUDIT_TEMPLATES: Record<string, string> = {
     'Reset {{requested}} subscription(s), {{succeeded}} succeeded',
   'subscription.batch_delete':
     'Deleted {{requested}} subscription(s), {{succeeded}} succeeded',
+  'subscription.reset_card_grant':
+    'Granted {{count}} subscription reset card(s) to {{requested}} user(s), {{succeeded}} succeeded',
+  'subscription.reset_card_invalidate':
+    'Disabled {{requested}} reset card(s), {{succeeded}} succeeded',
+  'subscription.reset_card_delete':
+    'Deleted {{requested}} reset card(s), {{succeeded}} succeeded',
   // Logs
   'log.clear': 'Cleared historical logs',
   'log.cleanup_start': 'Log cleanup task started.',
