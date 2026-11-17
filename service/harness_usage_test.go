@@ -213,11 +213,18 @@ func TestHarnessUsageClaudeHeaders(t *testing.T) {
 	assert.Equal(t, "0.25", headers["anthropic-ratelimit-unified-7d_sonnet-utilization"])
 	assert.Equal(t, "allowed", headers["anthropic-ratelimit-unified-status"])
 	assert.Equal(t, "7d", headers["anthropic-ratelimit-unified-representative-claim"])
-	// Both windows still have room, so neither has a boundary to promise: a
-	// rolling window that keeps getting traffic may never reach its anchor.
-	assert.NotContains(t, headers, "anthropic-ratelimit-unified-5h-reset")
-	assert.NotContains(t, headers, "anthropic-ratelimit-unified-7d-reset")
-	assert.NotContains(t, headers, "anthropic-ratelimit-unified-reset")
+	// An open window has a real end: the anchor is fixed for the window's life,
+	// so anchor + window keeps counting down instead of being echoed as a full
+	// window on every read.
+	assert.Equal(t, strconv.FormatInt(now-100+model.SubscriptionLimitWindow5h, 10),
+		headers["anthropic-ratelimit-unified-5h-reset"])
+	assert.Equal(t, strconv.FormatInt(now-100+model.SubscriptionLimitWindow7d, 10),
+		headers["anthropic-ratelimit-unified-7d-reset"])
+	assert.Equal(t, strconv.FormatInt(now-100+model.SubscriptionLimitWindow7d, 10),
+		headers["anthropic-ratelimit-unified-7d_sonnet-reset"])
+	// The representative reset follows the representative claim.
+	assert.Equal(t, strconv.FormatInt(now-100+model.SubscriptionLimitWindow7d, 10),
+		headers["anthropic-ratelimit-unified-reset"])
 
 	// Threshold and fallback headers would hijack Claude Code's own warnings.
 	for key := range headers {
@@ -377,9 +384,10 @@ func TestHarnessUsageWindowRollsWithoutPersisting(t *testing.T) {
 	assert.EqualValues(t, 80, reloaded.QuotaLimitStates[0].Used)
 }
 
-// A spent window is the one case where reset is a real promise: with no room
-// left no further charge can restart it, so anchor + window is when it rolls.
-func TestHarnessUsageReportsResetForExhaustedWindow(t *testing.T) {
+// The countdown must keep moving. A window's anchor is fixed for the window's
+// life, so anchor + window is a stable timestamp that shrinks as time passes
+// rather than a whole window re-derived from now on every read.
+func TestHarnessUsageResetCountsDownWhileWindowIsOpen(t *testing.T) {
 	now := common.GetTimestamp()
 	userId := 980106
 	seedHarnessUsagePlan(t, userId, true,
@@ -387,20 +395,80 @@ func TestHarnessUsageReportsResetForExhaustedWindow(t *testing.T) {
 			{Key: "5h", WindowSeconds: model.SubscriptionLimitWindow5h, AmountTotal: 100},
 		},
 		[]model.SubscriptionQuotaLimitState{
-			{Key: "5h", Used: 100, WindowFrom: now - 600},
+			{Key: "5h", Used: 30, WindowFrom: now - 600},
 		},
 	)
 	setHarnessUsageEnabled(t, true)
 
+	// Two reads 60s apart must hand back the same absolute reset, not two
+	// timestamps that each sit a full window in the future.
+	expected := now - 600 + model.SubscriptionLimitWindow5h
+	assert.EqualValues(t, expected, WindowResetAt(now-600, model.SubscriptionLimitWindow5h, now))
+	assert.EqualValues(t, expected, WindowResetAt(now-600, model.SubscriptionLimitWindow5h, now+60))
+
 	headers := snapshotHeaders(t, claudeRelayInfo(userId, 0))
-	assert.Equal(t, "1.00", headers["anthropic-ratelimit-unified-5h-utilization"])
-	assert.Equal(t, strconv.FormatInt(now-600+model.SubscriptionLimitWindow5h, 10),
+	assert.Equal(t, strconv.FormatInt(expected, 10),
 		headers["anthropic-ratelimit-unified-5h-reset"])
 
 	response := BuildHarnessUsageResponse(userId, 0)
 	require.NotNil(t, response.FiveHour)
 	require.NotNil(t, response.FiveHour.ResetsAt)
-	assert.EqualValues(t, now-600+model.SubscriptionLimitWindow5h, *response.FiveHour.ResetsAt)
+	assert.EqualValues(t, expected, *response.FiveHour.ResetsAt)
+}
+
+// No running window means no countdown. Reporting "now + window" here would
+// invent a fresh full window on every read, which is exactly the frozen bar this
+// rule exists to prevent.
+func TestHarnessUsageNoResetWithoutRunningWindow(t *testing.T) {
+	now := common.GetTimestamp()
+	userId := 980107
+	seedHarnessUsagePlan(t, userId, true,
+		[]model.SubscriptionQuotaLimit{
+			{Key: "5h", WindowSeconds: model.SubscriptionLimitWindow5h, AmountTotal: 100},
+		},
+		[]model.SubscriptionQuotaLimitState{
+			// Never charged, and an elapsed window whose roll is deferred until the
+			// next charge. Neither anchors a window that is ending right now.
+			{Key: "5h", Used: 0},
+		},
+	)
+	setHarnessUsageEnabled(t, true)
+
+	headers := snapshotHeaders(t, claudeRelayInfo(userId, 0))
+	assert.NotContains(t, headers, "anthropic-ratelimit-unified-5h-reset")
+	assert.NotContains(t, headers, "anthropic-ratelimit-unified-reset")
+
+	assert.Zero(t, WindowResetAt(0, model.SubscriptionLimitWindow5h, now))
+	assert.Zero(t, WindowResetAt(now-model.SubscriptionLimitWindow5h, model.SubscriptionLimitWindow5h, now),
+		"an elapsed window has no boundary left to report")
+}
+
+// A family with two live counters is still one bar: the cap counts once and the
+// usage adds up, so the bar reads 50% rather than double-counting the cap.
+func TestHarnessUsageMergesCountersOfOneModelGroup(t *testing.T) {
+	now := common.GetTimestamp()
+	userId := 980108
+	seedHarnessUsagePlan(t, userId, true,
+		[]model.SubscriptionQuotaLimit{
+			{Key: "sonnet", WindowSeconds: model.SubscriptionLimitWindow7d, AmountTotal: 200,
+				Models: []string{"claude-sonnet-*", "claude-sonnet-4-5"}},
+		},
+		[]model.SubscriptionQuotaLimitState{
+			{Key: "sonnet", Model: "claude-sonnet-4-5", Used: 50, WindowFrom: now - 100},
+			{Key: "sonnet", Model: "claude-sonnet-4-6", Used: 50, WindowFrom: now - 200},
+		},
+	)
+	setHarnessUsageEnabled(t, true)
+
+	headers := snapshotHeaders(t, claudeRelayInfo(userId, 0))
+	assert.Equal(t, "0.50", headers["anthropic-ratelimit-unified-7d_sonnet-utilization"])
+	// The group is only free again once its last counter rolls.
+	assert.Equal(t, strconv.FormatInt(now-100+model.SubscriptionLimitWindow7d, 10),
+		headers["anthropic-ratelimit-unified-7d_sonnet-reset"])
+
+	response := BuildHarnessUsageResponse(userId, 0)
+	require.NotNil(t, response.SevenDaySonnet)
+	assert.InDelta(t, 50, response.SevenDaySonnet.Utilization, 0.001)
 }
 
 func TestHarnessUsageCodexOverageInUse(t *testing.T) {
@@ -455,8 +523,12 @@ func TestHarnessUsageResponseUsesPercentages(t *testing.T) {
 	require.NotNil(t, response.SevenDay)
 	assert.InDelta(t, 25, response.FiveHour.Utilization, 0.001)
 	assert.InDelta(t, 25, response.SevenDay.Utilization, 0.001)
-	assert.Nil(t, response.FiveHour.ResetsAt, "a window with room left has no fixed reset to promise")
-	assert.Nil(t, response.SevenDay.ResetsAt)
+	// Each open window reports its own end, so the two bars count down
+	// independently rather than sharing one merged timestamp.
+	require.NotNil(t, response.FiveHour.ResetsAt)
+	assert.EqualValues(t, now-100+model.SubscriptionLimitWindow5h, *response.FiveHour.ResetsAt)
+	require.NotNil(t, response.SevenDay.ResetsAt)
+	assert.EqualValues(t, now-200+model.SubscriptionLimitWindow7d, *response.SevenDay.ResetsAt)
 	require.NotNil(t, response.ExtraUsage)
 	assert.True(t, response.ExtraUsage.IsEnabled)
 }
@@ -524,7 +596,8 @@ func TestHarnessUsageResponsePerModelFields(t *testing.T) {
 	require.NotNil(t, response)
 	require.NotNil(t, response.SevenDaySonnet)
 	assert.InDelta(t, 50, response.SevenDaySonnet.Utilization, 0.001)
-	assert.Nil(t, response.SevenDaySonnet.ResetsAt, "a window with room left has no fixed reset to promise")
+	require.NotNil(t, response.SevenDaySonnet.ResetsAt)
+	assert.EqualValues(t, now-200+model.SubscriptionLimitWindow7d, *response.SevenDaySonnet.ResetsAt)
 	assert.Nil(t, response.SevenDayOpus, "a 5h per-model cap has no 7d field to live in")
 	require.NotNil(t, response.ExtraUsage)
 	assert.False(t, response.ExtraUsage.IsEnabled, "an empty wallet means overage is unavailable")

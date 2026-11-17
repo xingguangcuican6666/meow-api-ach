@@ -65,9 +65,9 @@ type harnessUsageWindow struct {
 	Group         string
 	Total         int64
 	Used          int64
-	// WindowFrom is the latest anchor among the merged limits. It is raw: it
-	// says when the counter last restarted, not when it will reset, so callers
-	// run it through ClampWindowResetAt before showing a countdown.
+	// WindowFrom is the latest anchor among the merged limits, or 0 when none of
+	// them has a running window. Callers turn it into a countdown through
+	// WindowResetAt.
 	WindowFrom int64
 }
 
@@ -81,17 +81,20 @@ func (w harnessUsageWindow) utilization() float64 {
 	return min(max(used, 0), 1)
 }
 
-// ClampWindowResetAt returns the reset timestamp worth reporting at now, or 0.
+// WindowResetAt returns when the rolling window anchored at windowFrom rolls, or
+// 0 when there is no such moment to report.
 //
-// WindowFrom is a rolling anchor that only moves when an elapsed window
-// restarts, so anchor + WindowSeconds is the moment the counter would really
-// roll. While requests keep arriving the window never gets there — a refilled
-// counter starts moving again — so the countdown would sit at a full window
-// forever. Report it only when the counter is spent, which is exactly when the
-// window is guaranteed to roll at that timestamp; with room left the bar shows
-// usage alone and the number is not a promise we cannot keep.
-func ClampWindowResetAt(windowFrom int64, windowSeconds int64, now int64, used int64, total int64) int64 {
-	if windowFrom <= 0 || windowSeconds <= 0 || total <= 0 || used < total {
+// The anchor only moves when a window actually restarts, so anchor + window is a
+// real countdown that decreases on every refresh while the window is open. Two
+// states have no answer, and reporting a made-up one is what once pinned the bar
+// at a full window forever:
+//   - windowFrom <= 0: nothing has charged the counter (or an admin reset cleared
+//     it), so no window is running. now + window would be a fresh full window on
+//     every single read.
+//   - anchor + window already elapsed: windows roll lazily on the next charge, so
+//     the old anchor is history and the real restart is whenever traffic returns.
+func WindowResetAt(windowFrom int64, windowSeconds int64, now int64) int64 {
+	if windowFrom <= 0 || windowSeconds <= 0 {
 		return 0
 	}
 	resetAt := windowFrom + windowSeconds
@@ -248,9 +251,18 @@ func collectHarnessUsageWindows(userId int) []harnessUsageWindow {
 			}
 			groups := []string{""}
 			if len(limit.Models) > 0 {
+				// Two model patterns can land on the same group ("claude-sonnet-*"
+				// and "claude-sonnet-4-5" are both "sonnet"). Keep one group per
+				// family so the cap is not counted twice.
 				groups = groups[:0]
+				seen := make(map[string]struct{}, len(limit.Models))
 				for _, pattern := range limit.Models {
-					groups = append(groups, harnessModelGroup(pattern, limit.Key))
+					group := harnessModelGroup(pattern, limit.Key)
+					if _, ok := seen[group]; ok {
+						continue
+					}
+					seen[group] = struct{}{}
+					groups = append(groups, group)
 				}
 			}
 			for _, group := range groups {
@@ -276,14 +288,19 @@ func collectHarnessUsageWindows(userId int) []harnessUsageWindow {
 	return windows
 }
 
-// harnessLimitStateUsage reads one counter the way the UI does: the window is
-// rolled in memory only, so reporting never writes back to the database.
+// harnessLimitStateUsage sums the counters of one limit that belong to group,
+// the way the UI does: the window is rolled in memory only, so reporting never
+// writes back to the database.
+//
+// A model-scoped limit keeps one counter per model name, so a family can own
+// several counters ("claude-sonnet-4-5" and "claude-sonnet-4-6" are both
+// "sonnet"); they add up into the one bar for that family.
 func harnessLimitStateUsage(sub *model.UserSubscription, limit model.SubscriptionQuotaLimit, group string, now int64) (int64, int64) {
 	if sub == nil {
 		return 0, 0
 	}
-	// A model-scoped limit keeps one counter per model name; the group is the
-	// family, so every matching counter of that family is summed.
+	var used, windowFrom int64
+	matched := false
 	for _, state := range sub.QuotaLimitStates {
 		if state.Key != limit.Key {
 			continue
@@ -294,18 +311,27 @@ func harnessLimitStateUsage(sub *model.UserSubscription, limit model.Subscriptio
 		if len(limit.Models) == 0 && state.Model != "" {
 			continue
 		}
-		used := state.Used
-		windowFrom := state.WindowFrom
-		if windowFrom > 0 && now >= windowFrom+limit.WindowSeconds {
-			used = 0
-			windowFrom = now
+		matched = true
+		counterUsed := state.Used
+		counterFrom := state.WindowFrom
+		if counterFrom > 0 && now >= counterFrom+limit.WindowSeconds {
+			// The window elapsed but nothing has charged the counter since, so it
+			// has not restarted yet: the old anchor is history and there is no new
+			// one to count down to.
+			counterUsed = 0
+			counterFrom = 0
 		}
-		if windowFrom <= 0 {
-			windowFrom = now
+		used += counterUsed
+		if counterFrom > windowFrom {
+			// Report the last of the family's windows to roll: until then the
+			// group is not fully free again.
+			windowFrom = counterFrom
 		}
-		return used, windowFrom
 	}
-	return 0, now
+	if !matched {
+		return 0, 0
+	}
+	return used, windowFrom
 }
 
 // harnessModelGroup derives the short group name both harnesses use for
@@ -381,19 +407,19 @@ func fillClaudeUsageHeaders(headers map[string]string, windows []harnessUsageWin
 		switch window.WindowSeconds {
 		case model.SubscriptionLimitWindow5h:
 			abbrev, has5h = claudeClaim5h, true
-			if reset := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); reset > reset5h {
+			if reset := WindowResetAt(window.WindowFrom, window.WindowSeconds, now); reset > reset5h {
 				reset5h = reset
 			}
 		case model.SubscriptionLimitWindow7d:
 			abbrev, has7d = claudeClaim7d, true
-			if reset := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); reset > reset7d {
+			if reset := WindowResetAt(window.WindowFrom, window.WindowSeconds, now); reset > reset7d {
 				reset7d = reset
 			}
 		default:
 			continue
 		}
 		headers[claudeHeaderPrefix+abbrev+"-utilization"] = fmt.Sprintf("%.2f", window.utilization())
-		if reset := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); reset > 0 {
+		if reset := WindowResetAt(window.WindowFrom, window.WindowSeconds, now); reset > 0 {
 			headers[claudeHeaderPrefix+abbrev+"-reset"] = fmt.Sprintf("%d", reset)
 		}
 	}
@@ -412,7 +438,7 @@ func fillClaudeUsageHeaders(headers map[string]string, windows []harnessUsageWin
 		}
 		prefix := claudeHeaderPrefix + abbrev + "_" + sanitizeHeaderToken(window.Group)
 		headers[prefix+"-utilization"] = fmt.Sprintf("%.2f", window.utilization())
-		if reset := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); reset > 0 {
+		if reset := WindowResetAt(window.WindowFrom, window.WindowSeconds, now); reset > 0 {
 			headers[prefix+"-reset"] = fmt.Sprintf("%d", reset)
 		}
 	}
@@ -467,7 +493,7 @@ func fillCodexUsageHeaders(headers map[string]string, windows []harnessUsageWind
 	writeCodexWindow := func(prefix string, window harnessUsageWindow, slot string) {
 		headers[prefix+"-"+slot+"-used-percent"] = fmt.Sprintf("%.2f", window.utilization()*100)
 		headers[prefix+"-"+slot+"-window-minutes"] = fmt.Sprintf("%d", window.WindowSeconds/60)
-		if reset := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); reset > 0 {
+		if reset := WindowResetAt(window.WindowFrom, window.WindowSeconds, now); reset > 0 {
 			headers[prefix+"-"+slot+"-reset-at"] = fmt.Sprintf("%d", reset)
 		}
 	}
@@ -575,7 +601,7 @@ func BuildHarnessUsageResponse(userId int, walletQuota int) *HarnessUsageRespons
 	response := &HarnessUsageResponse{}
 	for _, window := range windows {
 		period := &HarnessUsagePeriod{Utilization: window.utilization() * 100}
-		if resetAt := ClampWindowResetAt(window.WindowFrom, window.WindowSeconds, now, window.Used, window.Total); resetAt > 0 {
+		if resetAt := WindowResetAt(window.WindowFrom, window.WindowSeconds, now); resetAt > 0 {
 			period.ResetsAt = &resetAt
 		}
 		if window.Group != "" {
